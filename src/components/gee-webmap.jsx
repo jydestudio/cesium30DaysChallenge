@@ -10,7 +10,7 @@ function GeeWebMap({ style = {}, onReady }) {
   const mapInstanceRef = useRef(null);
   const [status, setStatus] = useState("loading");
   const [error, setError] = useState(null);
-  const [currentLayer, setCurrentLayer] = useState('landsat');
+  const [currentLayer, setCurrentLayer] = useState('lulc');
   const [isBackendReady, setIsBackendReady] = useState(false);
 
   // Search state
@@ -92,9 +92,9 @@ function GeeWebMap({ style = {}, onReady }) {
     const map = mapInstanceRef.current;
 
     if (!map.loaded()) {
-      map.on('load', () => loadLayer(currentLayer));
+      // map.on('load', () => loadLayer(currentLayer));
     } else {
-      loadLayer(currentLayer);
+      // loadLayer(currentLayer);
     }
   }, [isBackendReady, currentLayer]);
 
@@ -254,6 +254,7 @@ function GeeWebMap({ style = {}, onReady }) {
   };
 
   const loadLayer = async (layerType) => {
+    console.log("🌍 Loading GEE layer:", layerType);
     const map = mapInstanceRef.current;
     if (!map) return;
 
@@ -632,6 +633,19 @@ function GeeWebMap({ style = {}, onReady }) {
             }}
           >
             ⛰️ Elevation (SRTM)
+          </button>
+
+          <button
+            onClick={() => setCurrentLayer('lulc')}
+            disabled={status === "loading_layer"}
+            style={{
+              ...buttonStyle,
+              backgroundColor: currentLayer === 'lulc' ? '#17acb1ff' : '#f8f9fa',
+              color: currentLayer === 'lulc' ? '#333333ff' : '#333',
+              border: currentLayer === 'lulc' ? 'none' : '1px solid #ddd'
+            }}
+          >
+            ⛰️ LULC
           </button>
         </div>
       )}

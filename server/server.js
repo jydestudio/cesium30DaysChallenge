@@ -107,6 +107,75 @@ app.post('/api/gee/landsat-tiles', async (req, res) => {
   }
 });
 
+
+
+// LULC 
+// Get LULC tiles with geometry clipping
+// Get LULC tiles with bounds clipping
+app.post('/api/gee/lulc-tiles', async (req, res) => {
+  try {
+    if (!isInitialized) {
+      return res.status(503).json({
+        error: 'Earth Engine not initialized yet'
+      });
+    }
+
+    const { startDate, endDate, geometry } = req.body;
+    let bounds = geometry.coordinates[0];
+    console.log('Received LULC tile request with params:', { startDate, endDate, geometry });
+    
+    // MODIS Land Cover collection
+    let collection = ee.ImageCollection('MODIS/006/MCD12Q1')
+      .filterDate(startDate || '2020-01-01', endDate || '2020-12-31')
+      .select('LC_Type1');
+
+    // Clip/filter by bounds if provided
+    let filtered = collection;
+    if (bounds) {
+      const geometry_to_clip = ee.Geometry.Rectangle(bounds);
+      filtered = collection.filterBounds(geometry_to_clip);
+    }
+
+    // Get median image
+    const image = collection.median();
+
+    // Visualization parameters
+    const visParams = {
+      min: 1,
+      max: 17,
+      palette: [
+        '05450a','086a10','54a708','78d203','009900','c6b044','dcd159',
+        'dade48','fbff13','b6ff05','27ff87','c24f44','a5a5a5','ff6d4c',
+        '69fff8','f9ffa4','1c0dff'
+      ]
+    };
+
+    // Generate map tiles
+    image.getMap(visParams, (mapInfo) => {
+      if (mapInfo && mapInfo.urlFormat) {
+        res.json({
+          success: true,
+          tileUrl: mapInfo.urlFormat
+        });
+      } else {
+        res.status(500).json({
+          error: 'Failed to generate LULC tiles'
+        });
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error generating LULC tiles:', error);
+    res.status(500).json({
+      error: error.message
+    });
+  }
+});
+
+
+
+
+
 // Get NDVI tiles
 app.post('/api/gee/ndvi-tiles', async (req, res) => {
   try {
