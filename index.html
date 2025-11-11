@@ -2,9 +2,37 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>30-day-challenge-app</title>
+    
+     <meta 
+        http-equiv="Content-Security-Policy" 
+        content="script-src 'self' 'unsafe-inline' 'unsafe-eval' 
+                https://www.gstatic.com 
+                https://accounts.google.com 
+                https://maps.googleapis.com 
+                https://ajax.googleapis.com 
+                https://apis.google.com; 
+                
+                connect-src 'self' 
+                https://content-earthengine.googleapis.com 
+                https://accounts.google.com 
+                https://oauth2.googleapis.com
+                https://maps.googleapis.com 
+                https://www.google.com;"
+      />
+
+    <!-- <script 
+      src="https://maps.googleapis.com/maps/api/js"
+      async
+      defer
+    ></script> -->
+    
+    <script 
+      src="https://ajax.googleapis.com/ajax/libs/earthengine/0.1.370/earthengine-api.js"
+      async
+      defer
+    ></script>
+
   </head>
   <body>
     <div id="root"></div>

@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { Send, User, Bot, Loader2, Globe } from 'lucide-react';
-import myGif from './assets/artificial_intelligence.gif';
+import myGif from '../assets/artificial_intelligence.gif';
 
 
 const systemInstruction = `You are Jyde, a geospatial AI assistant. Your primary role is to help users find locations and provide coordinates.

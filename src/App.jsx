@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
-import AIChatBox from './AIChatBox';
-import CesiumGlobe from './CesiumGlobe';
+import AIChatBox from './components/AIChatBox';
+import CesiumGlobe from './components/CesiumGlobe';
+import MapLibreMap from './components/maplibre.jsx';
+import GeeWebMap from './components/gee-webmap.jsx';
 import { Cartesian3, Color } from 'cesium';
 
 function App() {
