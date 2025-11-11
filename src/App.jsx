@@ -38,6 +38,7 @@ function App() {
                 <MapLibreMap/>
             </div> */}
 
+            {/* i don't understand shit */}
             <div style={{ width: '100%', height: '100%'}}>
                 <GeeWebMap/>
             </div> 
