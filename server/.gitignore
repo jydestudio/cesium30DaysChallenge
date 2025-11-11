@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Service account key (NEVER COMMIT THIS!)
+private-key.json
+*.json
+!package.json
+
+# Environment variables
+.env
+.env.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
