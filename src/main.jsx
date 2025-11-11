@@ -11,6 +11,7 @@ const accessToken = import.meta.env.VITE_CESIUM_ION_ACCESS_TOKEN;
 
 if (accessToken) {
   Ion.defaultAccessToken = accessToken;
+  console.log("✅ Cesium Ion access token set successfully.");
 } else {
   console.warn('Cesium Ion access token is not defined. Please set VITE_CESIUM_ION_ACCESS_TOKEN in your .env file.');
 }
