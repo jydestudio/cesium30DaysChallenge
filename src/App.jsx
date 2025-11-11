@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
-import AIChatBox from './AIChatBox';
-import CesiumGlobe from './CesiumGlobe';
+import AIChatBox from './components/AIChatBox';
+import CesiumGlobe from './components/CesiumGlobe';
+import MapLibreMap from './components/maplibre.jsx';
+import GeeWebMap from './components/gee-webmap.jsx';
 import { Cartesian3, Color } from 'cesium';
 
 function App() {
@@ -23,14 +25,22 @@ function App() {
 
     return (
         <div style={{ display: 'flex', height: '100vh', width: '100vw' }}>
-            <div style={{ flex: 1 }}>
+            {/* <div style={{ flex: 1, display: 'none'}}>
                 <CesiumGlobe markers={markers} />
-            </div>
+            </div> */}
             
             {/* Chat box as a sidebar on the right */}
-            <div style={{ width: '420px', height: '100%' }}>
-                <AIChatBox addMarker={addMarker} />
-            </div>
+            {/* <div style={{ width: '420px', height: '100%', display: 'none'}}>
+                <AIChatBox addMarker={addMarker}/>
+            </div> */}
+
+            {/* <div style={{ width: '100%', height: '100%'}}>
+                <MapLibreMap/>
+            </div> */}
+
+            <div style={{ width: '100%', height: '100%'}}>
+                <GeeWebMap/>
+            </div> 
         </div>
     );
 }

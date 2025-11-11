@@ -1,0 +1,95 @@
+/* --- Base Panel Style --- */
+.control-panel {
+  /* Positioning */
+  position: absolute;
+  top: 15px;
+  left: 15px;
+  z-index: 1100;
+  
+  /* Appearance */
+  background: #ffffff; /* Use solid white for a crisp look */
+  border-radius: 12px;
+  padding: 16px; /* Slightly more padding */
+  box-shadow: 0 6px 15px rgba(0, 0, 0, 0.1); /* Slightly more prominent, softer shadow */
+  max-width: 280px; /* Slightly wider */
+  min-width: 220px;
+  font-family: 'Inter', sans-serif, system-ui; /* Add system font fallback */
+  border: 1px solid #eee; /* Subtle border for definition */
+}
+
+/* --- Grouping and Labels --- */
+.control-group {
+  margin-bottom: 18px; /* Space between controls */
+}
+
+.control-group:last-child {
+  margin-bottom: 0; /* No margin on the last item */
+}
+
+.control-label {
+  display: block;
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 8px; /* Space below the label */
+  color: #333; /* Slightly softer text color */
+  display: flex; /* For aligning label and value */
+  justify-content: space-between;
+  align-items: center;
+}
+
+.value-display {
+  font-weight: 400; /* Value is less emphasized than the label */
+  color: #007bff; /* Use a primary color for the dynamic value */
+  font-size: 14px;
+}
+
+/* --- Range Slider Styling --- */
+.range-slider {
+  width: 100%;
+  cursor: pointer;
+  height: 6px; /* Thinner track */
+  border-radius: 3px;
+  /* Appearance will be largely controlled by accentColor in JSX */
+}
+
+/* --- Color Picker Styling --- */
+.color-picker-container {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.color-input {
+  /* Override default browser styling for a cleaner look */
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  width: 44px; /* Slightly larger target */
+  height: 44px;
+  border: 2px solid #ddd;
+  border-radius: 10px;
+  cursor: pointer;
+  background: transparent; /* Allows the value color to show through */
+  padding: 0;
+  overflow: hidden; /* Contains the color swatch */
+}
+
+.color-input::-webkit-color-swatch {
+  border-radius: 8px;
+  border: none;
+}
+
+.color-input::-moz-color-swatch {
+  border-radius: 8px;
+  border: none;
+}
+
+.color-hex-display {
+  font-size: 13px;
+  color: #555;
+  font-family: monospace; /* Monospace font for the hex code */
+  padding: 4px 8px;
+  background-color: #f7f7f7;
+  border-radius: 4px;
+  border: 1px solid #ddd;
+}
