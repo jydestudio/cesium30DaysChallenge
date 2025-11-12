@@ -34,14 +34,14 @@ function App() {
                 <AIChatBox addMarker={addMarker}/>
             </div> */}
 
-            <div style={{ width: '100%', height: '100%'}}>
+            {/* <div style={{ width: '100%', height: '100%'}}>
                 <MapLibreMap/>
-            </div>
+            </div> */}
 
             {/* i don't understand shit */}
-            {/* <div style={{ width: '100%', height: '100%'}}>
+            <div style={{ width: '100%', height: '100%'}}>
                 <GeeWebMap/>
-            </div>  */}
+            </div> 
         </div>
     );
 }

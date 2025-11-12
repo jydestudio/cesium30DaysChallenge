@@ -1,17 +1,34 @@
 import React, { useEffect, useRef, useState } from "react";
-import PropTypes from "prop-types";
 import maplibregl from "maplibre-gl";
+import { PieChart, Pie, BarChart, Bar, Cell, ResponsiveContainer, Legend, Tooltip, XAxis, YAxis } from 'recharts';
 import "maplibre-gl/dist/maplibre-gl.css";
 
 const API_BASE_URL = 'http://localhost:5000/api';
+
+// Enhanced color palette matching LULC classes
+const LULC_COLORS = {
+  water: '#419bdf',
+  trees: '#397d49',
+  grass: '#88b053',
+  flooded_vegetation: '#7a87c6',
+  crops: '#e49635',
+  shrub_and_scrub: '#dfc35a',
+  built: '#c4281b',
+  bare: '#a59b8f',
+  snow_and_ice: '#b39fe1'
+};
 
 function GeeWebMap({ style = {}, onReady }) {
   const mapContainerRef = useRef(null);
   const mapInstanceRef = useRef(null);
   const [status, setStatus] = useState("loading");
   const [error, setError] = useState(null);
-  const [currentLayer, setCurrentLayer] = useState('lulc');
   const [isBackendReady, setIsBackendReady] = useState(false);
+
+  // Stats state
+  const [lulcStats, setLulcStats] = useState(null);
+  const [isLoadingStats, setIsLoadingStats] = useState(false);
+  const [statsError, setStatsError] = useState(null);
 
   // Search state
   const [searchQuery, setSearchQuery] = useState('');
@@ -20,8 +37,9 @@ function GeeWebMap({ style = {}, onReady }) {
   const [isSearching, setIsSearching] = useState(false);
   const searchTimeoutRef = useRef(null);
 
-  // Current boundary geometry (for clipping GEE imagery)
+  // Current boundary geometry
   const [currentBoundary, setCurrentBoundary] = useState(null);
+  const [selectedLocation, setSelectedLocation] = useState('');
 
   // Check backend health
   useEffect(() => {
@@ -40,21 +58,19 @@ function GeeWebMap({ style = {}, onReady }) {
         }
       } catch (err) {
         console.error("❌ Backend not available:", err);
-        setError("Backend server not available. Make sure to run: cd server && npm start");
+        setError("Backend server not available");
         setStatus("error");
       }
     };
 
     checkBackend();
     const interval = setInterval(checkBackend, 3000);
-
     return () => clearInterval(interval);
   }, []);
 
   // Initialize map
   useEffect(() => {
     if (!mapContainerRef.current || mapInstanceRef.current) return;
-
 
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
@@ -64,11 +80,10 @@ function GeeWebMap({ style = {}, onReady }) {
       maxZoom: 18,
       hash: false,
       preserveDrawingBuffer: false,
-      fadeDuration: 0, // Disable fade animations for instant rendering
+      fadeDuration: 0,
       refreshExpiredTiles: false
     });
 
-    
     map.addControl(new maplibregl.NavigationControl(), 'top-right');
     mapInstanceRef.current = map;
 
@@ -85,25 +100,11 @@ function GeeWebMap({ style = {}, onReady }) {
     };
   }, [onReady]);
 
-  // Load GEE layer when backend is ready and layer changes
-  useEffect(() => {
-    if (!isBackendReady || !mapInstanceRef.current) return;
-
-    const map = mapInstanceRef.current;
-
-    if (!map.loaded()) {
-      // map.on('load', () => loadLayer(currentLayer));
-    } else {
-      // loadLayer(currentLayer);
-    }
-  }, [isBackendReady, currentLayer]);
-
-  // Search for location
+  // Search handling
   const handleSearchInput = (e) => {
     const query = e.target.value;
     setSearchQuery(query);
 
-    // Clear previous timeout
     if (searchTimeoutRef.current) {
       clearTimeout(searchTimeoutRef.current);
     }
@@ -114,7 +115,6 @@ function GeeWebMap({ style = {}, onReady }) {
       return;
     }
 
-    // Debounce search
     setIsSearching(true);
     searchTimeoutRef.current = setTimeout(async () => {
       try {
@@ -139,12 +139,11 @@ function GeeWebMap({ style = {}, onReady }) {
     const lat = parseFloat(result.lat);
     const lon = parseFloat(result.lon);
 
-    // Clear search UI
     setSearchQuery(result.display_name);
+    setSelectedLocation(result.display_name.split(',')[0]);
     setShowResults(false);
 
     try {
-      // Fetch the boundary/shapefile for this location
       console.log('🗺️ Fetching boundary for:', result.display_name);
 
       const boundaryResponse = await fetch(
@@ -152,39 +151,30 @@ function GeeWebMap({ style = {}, onReady }) {
       );
       const boundaryData = await boundaryResponse.json();
 
-      // Remove previous boundary layer if it exists
-      if (map.getLayer('location-boundary-fill')) {
-        map.removeLayer('location-boundary-fill');
-      }
-      if (map.getLayer('location-boundary-outline')) {
-        map.removeLayer('location-boundary-outline');
-      }
-      if (map.getSource('location-boundary')) {
-        map.removeSource('location-boundary');
-      }
+      // Remove previous boundary
+      if (map.getLayer('location-boundary-fill')) map.removeLayer('location-boundary-fill');
+      if (map.getLayer('location-boundary-outline')) map.removeLayer('location-boundary-outline');
+      if (map.getSource('location-boundary')) map.removeSource('location-boundary');
 
-      // Add the boundary to the map if we got valid geometry
       if (boundaryData.length > 0 && boundaryData[0].geojson) {
         const geojson = boundaryData[0].geojson;
-        console.log('✅ Got boundary GeoJSON', geojson);
+        console.log('✅ Got boundary GeoJSON');
 
         map.addSource('location-boundary', {
           type: 'geojson',
           data: geojson
         });
 
-        // Add fill layer
         map.addLayer({
           id: 'location-boundary-fill',
           type: 'fill',
           source: 'location-boundary',
           paint: {
             'fill-color': '#4285f4',
-            'fill-opacity': 0.2
+            'fill-opacity': 0.1
           }
         });
 
-        // Add outline layer
         map.addLayer({
           id: 'location-boundary-outline',
           type: 'line',
@@ -196,19 +186,16 @@ function GeeWebMap({ style = {}, onReady }) {
           }
         });
 
-        console.log('✅ Boundary added to map');
-
-        // Store the boundary for clipping GEE imagery
         setCurrentBoundary(geojson);
 
-        // Reload the current layer with the new boundary
-        if (currentLayer) {
-          loadLayer(currentLayer);
-        }
+        // Load LULC tiles first (fast)
+        await loadLULCLayer(geojson);
 
-        // Calculate bounds and fit map to boundary
+        // Then load statistics (slower)
+        loadLULCStats(geojson);
+
+        // Fit bounds
         const bounds = new maplibregl.LngLatBounds();
-
         const addCoordinatesToBounds = (coords) => {
           if (Array.isArray(coords[0])) {
             coords.forEach(coord => addCoordinatesToBounds(coord));
@@ -225,15 +212,12 @@ function GeeWebMap({ style = {}, onReady }) {
           });
         }
 
-        // Fly to fit the boundary
         map.fitBounds(bounds, {
           padding: 50,
           duration: 2000,
           maxZoom: 15
         });
       } else {
-        // If no boundary available, just fly to the point
-        console.log('ℹ️ No boundary available, flying to point');
         map.flyTo({
           center: [lon, lat],
           zoom: 12,
@@ -243,7 +227,6 @@ function GeeWebMap({ style = {}, onReady }) {
       }
     } catch (err) {
       console.error('❌ Error fetching boundary:', err);
-      // Fall back to simple flyTo
       map.flyTo({
         center: [lon, lat],
         zoom: 12,
@@ -253,8 +236,8 @@ function GeeWebMap({ style = {}, onReady }) {
     }
   };
 
-  const loadLayer = async (layerType) => {
-    console.log("🌍 Loading GEE layer:", layerType);
+  const loadLULCLayer = async (geometry) => {
+    console.log("🌍 Loading LULC layer");
     const map = mapInstanceRef.current;
     if (!map) return;
 
@@ -262,63 +245,17 @@ function GeeWebMap({ style = {}, onReady }) {
     setError(null);
 
     try {
-      // Remove existing GEE layer if present
-      if (map.getLayer('gee-layer')) {
-        map.removeLayer('gee-layer');
-      }
-      if (map.getSource('gee-source')) {
-        map.removeSource('gee-source');
-      }
+      if (map.getLayer('gee-layer')) map.removeLayer('gee-layer');
+      if (map.getSource('gee-source')) map.removeSource('gee-source');
 
-      let tileUrl;
-      let endpoint;
-      let body = {};
-
-      switch (layerType) {
-        case 'lulc':
-          endpoint = `${API_BASE_URL}/gee/lulc-tiles`;
-          body = {
-            startDate: '2020-01-01',
-            endDate: '2020-12-31',
-            geometry: currentBoundary // Send boundary for clipping
-          };
-          break;
-        case 'landsat':
-          endpoint = `${API_BASE_URL}/gee/landsat-tiles`;
-          body = {
-            startDate: '2020-01-01',
-            endDate: '2020-12-31',
-            geometry: currentBoundary // Send boundary for clipping
-          };
-          break;
-        case 'ndvi':
-          endpoint = `${API_BASE_URL}/gee/ndvi-tiles`;
-          body = {
-            startDate: '2020-06-01',
-            endDate: '2020-09-01',
-            geometry: currentBoundary // Send boundary for clipping
-          };
-          break;
-        case 'elevation':
-          endpoint = `${API_BASE_URL}/gee/elevation-tiles`;
-          body = {
-            geometry: currentBoundary // Send boundary for clipping
-          };
-          break;
-        default:
-          return;
-      }
-
-      if (currentBoundary) {
-        console.log(`🗺️ Loading ${layerType} clipped to boundary`);
-      }
-
-      console.log(`🌍 Fetching ${layerType} tiles from backend...`);
-
-      const response = await fetch(endpoint, {
+      const response = await fetch(`${API_BASE_URL}/gee/lulc-tiles`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
+        body: JSON.stringify({
+          startDate: '2020-01-01',
+          endDate: '2025-12-31',
+          geometry: geometry
+        })
       });
 
       const data = await response.json();
@@ -327,17 +264,15 @@ function GeeWebMap({ style = {}, onReady }) {
         throw new Error(data.error || 'Failed to get tiles');
       }
 
-      tileUrl = data.tileUrl;
-      console.log(`✅ Got tile URL for ${layerType}`);
+      console.log('✅ Got LULC tile URL');
 
-      // Add GEE layer with performance optimizations
       map.addSource('gee-source', {
         type: 'raster',
-        tiles: [tileUrl],
+        tiles: [data.tileUrl],
         tileSize: 256,
         maxzoom: 18,
         minzoom: 0,
-        scheme: 'xyz' // Explicitly set scheme for GEE tiles
+        scheme: 'xyz'
       });
 
       map.addLayer({
@@ -345,19 +280,310 @@ function GeeWebMap({ style = {}, onReady }) {
         type: 'raster',
         source: 'gee-source',
         paint: {
-          'raster-opacity': 0.9, // Slightly higher opacity for better visibility
-          'raster-fade-duration': 0 // Instant rendering, no fade
+          'raster-opacity': 0.85,
+          'raster-fade-duration': 0
         }
       });
 
       setStatus("ready");
-      console.log(`✅ ${layerType} layer loaded successfully`);
+      console.log('✅ LULC layer loaded successfully');
 
     } catch (err) {
-      console.error(`❌ Failed to load ${layerType} layer:`, err);
-      setError(`Failed to load ${layerType}: ${err.message}`);
+      console.error('❌ Failed to load LULC layer:', err);
+      setError(`Failed to load LULC: ${err.message}`);
       setStatus("error");
     }
+  };
+
+  const loadLULCStats = async (geometry) => {
+    console.log("📊 Loading LULC statistics");
+    setIsLoadingStats(true);
+    setStatsError(null);
+    setLulcStats(null);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/gee/lulc-stats`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          startDate: '2020-01-01',
+          endDate: '2020-12-31',
+          geometry: geometry
+        })
+      });
+
+      const data = await response.json();
+
+      if (!data.success) {
+        throw new Error(data.error || 'Failed to get statistics');
+      }
+
+      console.log('✅ LULC statistics loaded');
+      setLulcStats(data.statistics);
+      setIsLoadingStats(false);
+
+    } catch (err) {
+      console.error('❌ Failed to load LULC statistics:', err);
+      setStatsError(err.message);
+      setIsLoadingStats(false);
+    }
+  };
+
+  // Custom tooltip for charts
+  const CustomTooltip = ({ active, payload }) => {
+    if (active && payload && payload.length) {
+      const data = payload[0].payload;
+      return (
+        <div style={{
+          backgroundColor: 'rgba(20, 20, 20, 0.95)',
+          border: `2px solid ${data.color}`,
+          borderRadius: '8px',
+          padding: '12px',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.4)'
+        }}>
+          <p style={{ color: '#fff', fontWeight: 'bold', margin: '0 0 8px 0', textTransform: 'capitalize' }}>
+            {data.class.replace(/_/g, ' ')}
+          </p>
+          <p style={{ color: data.color, margin: '4px 0', fontSize: '14px' }}>
+            Area: {data.areaInSqKm.toFixed(2)} km²
+          </p>
+          <p style={{ color: data.color, margin: '4px 0', fontSize: '14px' }}>
+            {data.areaInHectares.toFixed(0)} hectares
+          </p>
+          <p style={{ color: data.color, margin: '4px 0', fontSize: '16px', fontWeight: 'bold' }}>
+            {data.percentage.toFixed(1)}%
+          </p>
+        </div>
+      );
+    }
+    return null;
+  };
+
+  // Render analytics panel
+  const renderAnalyticsPanel = () => {
+    if (!selectedLocation) {
+      return (
+        <div style={analyticsPanelStyle}>
+          <div style={{ textAlign: 'center', padding: '40px 20px' }}>
+            <div style={{ fontSize: '48px', marginBottom: '16px' }}>🌍</div>
+            <h3 style={{ color: '#fff', marginBottom: '8px' }}>Land Cover Analytics</h3>
+            <p style={{ color: '#999', fontSize: '14px' }}>
+              Search and select a location to view detailed land cover statistics
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    if (isLoadingStats) {
+      return (
+        <div style={analyticsPanelStyle}>
+          <div style={{ padding: '20px' }}>
+            <h3 style={{ color: '#fff', marginBottom: '16px', fontSize: '18px' }}>
+              📊 {selectedLocation}
+            </h3>
+            <div style={{ textAlign: 'center', padding: '40px 20px' }}>
+              <div className="pulse" style={{
+                width: '60px',
+                height: '60px',
+                margin: '0 auto 20px',
+                borderRadius: '50%',
+                border: '3px solid #4285f4',
+                borderTopColor: 'transparent',
+                animation: 'spin 1s linear infinite'
+              }} />
+              <p style={{ color: '#4285f4', fontSize: '16px', fontWeight: '500' }}>
+                Calculating land cover statistics...
+              </p>
+              <p style={{ color: '#666', fontSize: '13px', marginTop: '8px' }}>
+                This may take a few seconds
+              </p>
+            </div>
+            
+            {/* Skeleton charts */}
+            <div style={{ opacity: 0.3, filter: 'blur(2px)' }}>
+              <div style={{ height: '250px', backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: '8px', marginBottom: '16px' }} />
+              <div style={{ height: '200px', backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: '8px' }} />
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    if (statsError) {
+      return (
+        <div style={analyticsPanelStyle}>
+          <div style={{ padding: '20px', textAlign: 'center' }}>
+            <div style={{ fontSize: '48px', marginBottom: '16px' }}>⚠️</div>
+            <h3 style={{ color: '#ea4335', marginBottom: '8px' }}>Error Loading Statistics</h3>
+            <p style={{ color: '#999', fontSize: '14px' }}>{statsError}</p>
+            <button
+              onClick={() => loadLULCStats(currentBoundary)}
+              style={{
+                marginTop: '16px',
+                padding: '10px 20px',
+                backgroundColor: '#4285f4',
+                color: 'white',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontSize: '14px'
+              }}
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    if (!lulcStats) return null;
+
+    const chartData = lulcStats.classes.map(cls => ({
+      ...cls,
+      name: cls.class.replace(/_/g, ' '),
+      value: cls.percentage
+    }));
+
+    return (
+      <div style={analyticsPanelStyle}>
+        <div style={{ padding: '20px', overflowY: 'auto', height: '100%' }}>
+          {/* Header */}
+          <div style={{ marginBottom: '24px' }}>
+            <h3 style={{ color: '#fff', marginBottom: '8px', fontSize: '18px', fontWeight: '600' }}>
+              📊 {selectedLocation}
+            </h3>
+            <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+              <div style={statCardStyle}>
+                <div style={{ color: '#4285f4', fontSize: '24px', fontWeight: 'bold' }}>
+                  {lulcStats.totalAreaSqKm.toFixed(2)}
+                </div>
+                <div style={{ color: '#999', fontSize: '12px' }}>km² Total Area</div>
+              </div>
+              <div style={statCardStyle}>
+                <div style={{ color: '#34a853', fontSize: '24px', fontWeight: 'bold' }}>
+                  {chartData.length}
+                </div>
+                <div style={{ color: '#999', fontSize: '12px' }}>Land Types</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Pie Chart */}
+          <div style={{ marginBottom: '24px' }}>
+            <h4 style={{ color: '#fff', fontSize: '14px', marginBottom: '12px', fontWeight: '500' }}>
+              Distribution Overview
+            </h4>
+            <ResponsiveContainer width="100%" height={250}>
+              <PieChart>
+                <Pie
+                  data={chartData}
+                  cx="50%"
+                  cy="50%"
+                  labelLine={false}
+                  label={({ name, percentage }) => `${name}: ${percentage.toFixed(1)}%`}
+                  outerRadius={80}
+                  fill="#8884d8"
+                  dataKey="value"
+                  animationDuration={800}
+                  animationBegin={0}
+                >
+                  {chartData.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={`#${entry.color}`} />
+                  ))}
+                </Pie>
+                <Tooltip content={<CustomTooltip />} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* Bar Chart */}
+          <div style={{ marginBottom: '24px' }}>
+            <h4 style={{ color: '#fff', fontSize: '14px', marginBottom: '12px', fontWeight: '500' }}>
+              Area Comparison (km²)
+            </h4>
+            <ResponsiveContainer width="100%" height={200}>
+              <BarChart data={chartData} margin={{ top: 5, right: 5, left: 5, bottom: 5 }}>
+                <XAxis 
+                  dataKey="name" 
+                  tick={{ fill: '#999', fontSize: 11 }}
+                  angle={-45}
+                  textAnchor="end"
+                  height={80}
+                />
+                <YAxis tick={{ fill: '#999', fontSize: 11 }} />
+                <Tooltip content={<CustomTooltip />} />
+                <Bar dataKey="areaInSqKm" animationDuration={800} radius={[8, 8, 0, 0]}>
+                  {chartData.map((entry, index) => (
+                    <Cell key={`bar-${index}`} fill={`#${entry.color}`} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* Detailed List */}
+          <div>
+            <h4 style={{ color: '#fff', fontSize: '14px', marginBottom: '12px', fontWeight: '500' }}>
+              Detailed Breakdown
+            </h4>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {chartData.map((cls, idx) => (
+                <div
+                  key={idx}
+                  style={{
+                    backgroundColor: 'rgba(255,255,255,0.05)',
+                    borderRadius: '8px',
+                    padding: '12px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '12px',
+                    animation: `slideIn 0.3s ease ${idx * 0.1}s both`
+                  }}
+                >
+                  <div
+                    style={{
+                      width: '24px',
+                      height: '24px',
+                      borderRadius: '4px',
+                      backgroundColor: `#${cls.color}`,
+                      flexShrink: 0
+                    }}
+                  />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ color: '#fff', fontSize: '13px', fontWeight: '500', textTransform: 'capitalize' }}>
+                      {cls.name}
+                    </div>
+                    <div style={{ color: '#999', fontSize: '11px' }}>
+                      {cls.areaInHectares.toFixed(0)} ha
+                    </div>
+                  </div>
+                  <div style={{ color: `#${cls.color}`, fontSize: '16px', fontWeight: 'bold' }}>
+                    {cls.percentage.toFixed(1)}%
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <style>{`
+          @keyframes spin {
+            to { transform: rotate(360deg); }
+          }
+          @keyframes slideIn {
+            from {
+              opacity: 0;
+              transform: translateX(-20px);
+            }
+            to {
+              opacity: 1;
+              transform: translateX(0);
+            }
+          }
+        `}</style>
+      </div>
+    );
   };
 
   // Styles
@@ -365,7 +591,7 @@ function GeeWebMap({ style = {}, onReady }) {
     width: "100%",
     height: "100vh",
     position: "relative",
-    backgroundColor: "#e8e8e8",
+    backgroundColor: "#0a0a0a",
     ...style
   };
 
@@ -379,48 +605,34 @@ function GeeWebMap({ style = {}, onReady }) {
     flexDirection: "column",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(255, 255, 255, 0.95)",
+    backgroundColor: "rgba(10, 10, 10, 0.95)",
     zIndex: 1000,
     padding: "20px"
   };
 
-  const controlsStyle = {
-    // display: 'none',
+  const analyticsPanelStyle = {
     position: "absolute",
     top: "10px",
     left: "10px",
+    width: "420px",
+    maxHeight: "calc(100vh - 20px)",
+    backgroundColor: "rgba(20, 20, 20, 0.95)",
+    borderRadius: "16px",
+    boxShadow: "0 8px 32px rgba(0, 0, 0, 0.6)",
+    backdropFilter: "blur(20px)",
+    border: "1px solid rgba(255, 255, 255, 0.1)",
     zIndex: 999,
-    backgroundColor: "rgba(255, 255, 255, 0.95)",
-    padding: "15px",
-    borderRadius: "8px",
-    boxShadow: "0 2px 8px rgba(0,0,0,0.2)"
+    overflow: "hidden"
   };
 
-  const buttonStyle = {
-    padding: "10px 20px",
-    margin: "5px 0",
-    width: "100%",
-    border: "none",
-    borderRadius: "4px",
-    cursor: "pointer",
-    fontSize: "14px",
-    fontWeight: "500",
-    transition: "all 0.2s"
+  const statCardStyle = {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: '8px',
+    padding: '12px 16px',
+    flex: '1',
+    minWidth: '120px'
   };
 
-  const statusStyle = {
-    position: "absolute",
-    bottom: "10px",
-    right: "10px",
-    zIndex: 999,
-    backgroundColor: "rgba(255, 255, 255, 0.95)",
-    padding: "8px 12px",
-    borderRadius: "6px",
-    fontSize: "12px",
-    boxShadow: "0 2px 4px rgba(0,0,0,0.2)"
-  };
-
-  // Search styles
   const searchContainerStyle = {
     position: "absolute",
     top: "20px",
@@ -429,11 +641,6 @@ function GeeWebMap({ style = {}, onReady }) {
     width: "90%",
     maxWidth: "500px",
     zIndex: 1000
-  };
-
-  const searchBoxStyle = {
-    position: "relative",
-    width: "100%"
   };
 
   const searchInputStyle = {
@@ -446,7 +653,6 @@ function GeeWebMap({ style = {}, onReady }) {
     color: "#ffffff",
     outline: "none",
     boxShadow: "0 4px 20px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.1)",
-    transition: "all 0.3s ease",
     backdropFilter: "blur(10px)"
   };
 
@@ -456,7 +662,6 @@ function GeeWebMap({ style = {}, onReady }) {
     top: "50%",
     transform: "translateY(-50%)",
     color: "#888",
-    pointerEvents: "none",
     fontSize: "18px"
   };
 
@@ -465,7 +670,7 @@ function GeeWebMap({ style = {}, onReady }) {
     backgroundColor: "rgba(30, 30, 30, 0.98)",
     borderRadius: "12px",
     overflow: "hidden",
-    boxShadow: "0 8px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.1)",
+    boxShadow: "0 8px 32px rgba(0, 0, 0, 0.5)",
     maxHeight: "400px",
     overflowY: "auto",
     backdropFilter: "blur(10px)"
@@ -475,34 +680,39 @@ function GeeWebMap({ style = {}, onReady }) {
     padding: "14px 18px",
     cursor: "pointer",
     borderBottom: "1px solid rgba(255, 255, 255, 0.05)",
-    transition: "all 0.2s ease",
     color: "#e0e0e0",
     fontSize: "14px"
   };
 
-  const resultItemHoverStyle = {
-    backgroundColor: "rgba(66, 133, 244, 0.15)",
-    borderLeft: "3px solid #4285f4"
+  const statusStyle = {
+    position: "absolute",
+    bottom: "10px",
+    right: "10px",
+    zIndex: 999,
+    backgroundColor: "rgba(20, 20, 20, 0.95)",
+    padding: "8px 12px",
+    borderRadius: "8px",
+    fontSize: "12px",
+    boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+    border: "1px solid rgba(255, 255, 255, 0.1)",
+    color: "#fff"
   };
 
   const renderOverlay = () => {
     if (status === "loading" || status === "initializing") {
       return (
         <div style={overlayStyle}>
-          <p style={{ fontSize: "18px", marginBottom: "10px" }}>
-            {status === "loading" ? "⏳ Connecting to backend..." : "⏳ Initializing Earth Engine..."}
-          </p>
-          <p style={{ fontSize: "14px", color: "#666" }}>
-            Make sure the backend server is running:<br />
-            <code style={{
-              backgroundColor: "#f5f5f5",
-              padding: "4px 8px",
-              borderRadius: "4px",
-              marginTop: "8px",
-              display: "inline-block"
-            }}>
-              cd server && npm start
-            </code>
+          <div className="pulse" style={{
+            width: '80px',
+            height: '80px',
+            margin: '0 auto 20px',
+            borderRadius: '50%',
+            border: '4px solid #4285f4',
+            borderTopColor: 'transparent',
+            animation: 'spin 1s linear infinite'
+          }} />
+          <p style={{ fontSize: "18px", color: "#fff", marginBottom: "10px" }}>
+            {status === "loading" ? "Connecting to Earth Engine..." : "Initializing..."}
           </p>
         </div>
       );
@@ -512,19 +722,19 @@ function GeeWebMap({ style = {}, onReady }) {
       return (
         <div style={overlayStyle}>
           <p style={{ fontSize: "18px", color: "#ea4335", marginBottom: "10px" }}>
-            ⚠️ Backend Connection Error
+            ⚠️ Connection Error
           </p>
-          <p style={{ fontSize: "14px", color: "#666", maxWidth: "400px", textAlign: "center" }}>
-            {error}
-          </p>
+          <p style={{ fontSize: "14px", color: "#999" }}>{error}</p>
           <button
             onClick={() => window.location.reload()}
             style={{
-              ...buttonStyle,
+              marginTop: "16px",
+              padding: "12px 24px",
               backgroundColor: "#4285f4",
               color: "white",
-              marginTop: "16px",
-              width: "auto"
+              border: "none",
+              borderRadius: "8px",
+              cursor: "pointer"
             }}
           >
             Retry
@@ -542,10 +752,13 @@ function GeeWebMap({ style = {}, onReady }) {
 
       {renderOverlay()}
 
+      {/* Analytics Panel */}
+      {isBackendReady && renderAnalyticsPanel()}
+
       {/* Search Bar */}
-      {isBackendReady && status !== "loading" && status !== "initializing" && (
+      {isBackendReady && (
         <div style={searchContainerStyle}>
-          <div style={searchBoxStyle}>
+          <div style={{ position: 'relative' }}>
             <input
               type="text"
               placeholder="Search for a location..."
@@ -559,7 +772,6 @@ function GeeWebMap({ style = {}, onReady }) {
             </span>
           </div>
 
-          {/* Search Results */}
           {showResults && searchResults.length > 0 && (
             <div style={resultsContainerStyle}>
               {searchResults.map((result, index) => (
@@ -568,8 +780,8 @@ function GeeWebMap({ style = {}, onReady }) {
                   style={resultItemStyle}
                   onClick={() => handleSelectLocation(result)}
                   onMouseEnter={(e) => {
-                    e.currentTarget.style.backgroundColor = resultItemHoverStyle.backgroundColor;
-                    e.currentTarget.style.borderLeft = resultItemHoverStyle.borderLeft;
+                    e.currentTarget.style.backgroundColor = 'rgba(66, 133, 244, 0.15)';
+                    e.currentTarget.style.borderLeft = '3px solid #4285f4';
                   }}
                   onMouseLeave={(e) => {
                     e.currentTarget.style.backgroundColor = 'transparent';
@@ -579,7 +791,7 @@ function GeeWebMap({ style = {}, onReady }) {
                   <div style={{ fontWeight: '500', marginBottom: '4px', color: '#ffffff' }}>
                     {result.display_name.split(',')[0]}
                   </div>
-                  <div style={{ fontSize: '12px', color: '#999', lineHeight: '1.4' }}>
+                  <div style={{ fontSize: '12px', color: '#999' }}>
                     {result.display_name}
                   </div>
                 </div>
@@ -589,82 +801,16 @@ function GeeWebMap({ style = {}, onReady }) {
         </div>
       )}
 
-      {/* Layer Controls */}
-      {isBackendReady && status !== "loading" && status !== "initializing" && (
-        <div style={controlsStyle}>
-          <h3 style={{ margin: "0 0 12px 0", fontSize: "16px", fontWeight: "600" }}>
-            🌍 Earth Engine Layers
-          </h3>
-
-          <button
-            onClick={() => setCurrentLayer('landsat')}
-            disabled={status === "loading_layer"}
-            style={{
-              ...buttonStyle,
-              backgroundColor: currentLayer === 'landsat' ? '#4285f4' : '#f8f9fa',
-              color: currentLayer === 'landsat' ? 'white' : '#333',
-              border: currentLayer === 'landsat' ? 'none' : '1px solid #ddd'
-            }}
-          >
-            🛰️ Landsat Imagery
-          </button>
-
-          <button
-            onClick={() => setCurrentLayer('ndvi')}
-            disabled={status === "loading_layer"}
-            style={{
-              ...buttonStyle,
-              backgroundColor: currentLayer === 'ndvi' ? '#34a853' : '#f8f9fa',
-              color: currentLayer === 'ndvi' ? 'white' : '#333',
-              border: currentLayer === 'ndvi' ? 'none' : '1px solid #ddd'
-            }}
-          >
-            🌿 NDVI (Vegetation)
-          </button>
-
-          <button
-            onClick={() => setCurrentLayer('elevation')}
-            disabled={status === "loading_layer"}
-            style={{
-              ...buttonStyle,
-              backgroundColor: currentLayer === 'elevation' ? '#fbbc04' : '#f8f9fa',
-              color: currentLayer === 'elevation' ? '#333' : '#333',
-              border: currentLayer === 'elevation' ? 'none' : '1px solid #ddd'
-            }}
-          >
-            ⛰️ Elevation (SRTM)
-          </button>
-
-          <button
-            onClick={() => setCurrentLayer('lulc')}
-            disabled={status === "loading_layer"}
-            style={{
-              ...buttonStyle,
-              backgroundColor: currentLayer === 'lulc' ? '#17acb1ff' : '#f8f9fa',
-              color: currentLayer === 'lulc' ? '#333333ff' : '#333',
-              border: currentLayer === 'lulc' ? 'none' : '1px solid #ddd'
-            }}
-          >
-            ⛰️ LULC
-          </button>
-        </div>
-      )}
-
       {/* Status Indicator */}
       {isBackendReady && (
         <div style={statusStyle}>
-          {status === "loading_layer" && <span>⏳ Loading...</span>}
+          {status === "loading_layer" && <span>⏳ Loading imagery...</span>}
           {status === "ready" && <span style={{ color: '#34a853' }}>✅ Ready</span>}
-          {status === "error" && error && <span style={{ color: '#ea4335' }}>❌ Error</span>}
+          {status === "error" && <span style={{ color: '#ea4335' }}>❌ Error</span>}
         </div>
       )}
     </div>
   );
 }
-
-GeeWebMap.propTypes = {
-  style: PropTypes.object,
-  onReady: PropTypes.func,
-};
 
 export default GeeWebMap;

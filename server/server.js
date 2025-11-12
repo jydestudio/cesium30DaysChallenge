@@ -63,7 +63,6 @@ app.post('/api/gee/landsat-tiles', async (req, res) => {
 
     const {startDate, endDate, geometry } = req.body;
 
-    console.log('Received Landsat tile request with params:', { startDate, endDate, geometry });
 
     
     // Build geometry if provided and valid
@@ -109,9 +108,7 @@ app.post('/api/gee/landsat-tiles', async (req, res) => {
 
 
 
-// LULC 
-// Get LULC tiles with geometry clipping
-// Get LULC tiles with bounds clipping
+// LULC with 3D hillshade effect (Fast - tiles only)
 app.post('/api/gee/lulc-tiles', async (req, res) => {
   try {
     if (!isInitialized) {
@@ -121,41 +118,87 @@ app.post('/api/gee/lulc-tiles', async (req, res) => {
     }
 
     const { startDate, endDate, geometry } = req.body;
-    let bounds = geometry.coordinates[0];
-    console.log('Received LULC tile request with params:', { startDate, endDate, geometry });
-    
-    // MODIS Land Cover collection
-    let collection = ee.ImageCollection('MODIS/006/MCD12Q1')
-      .filterDate(startDate || '2020-01-01', endDate || '2020-12-31')
-      .select('LC_Type1');
 
-    // Clip/filter by bounds if provided
-    let filtered = collection;
-    if (bounds) {
-      const geometry_to_clip = ee.Geometry.Rectangle(bounds);
-      filtered = collection.filterBounds(geometry_to_clip);
+
+    // Build geometry if provided and valid
+    let clipGeometry = null;
+    if (geometry && geometry.coordinates) {
+      clipGeometry = ee.Geometry(geometry);
     }
 
-    // Get median image
-    const image = collection.median();
+    // Define class names and palette
+    const CLASS_NAMES = [
+      'water', 'trees', 'grass', 'flooded_vegetation', 'crops',
+      'shrub_and_scrub', 'built', 'bare', 'snow_and_ice'
+    ];
+    
+    const VIS_PALETTE = [
+      '419bdf', '397d49', '88b053', '7a87c6', 'e49635', 
+      'dfc35a', 'c4281b', 'a59b8f', 'b39fe1'
+    ];
 
-    // Visualization parameters
+    // Get Dynamic World LULC collection
+    let lulcCollection = ee.ImageCollection("GOOGLE/DYNAMICWORLD/V1")
+      .filterDate(startDate || '2025-01-01', endDate || '2020-12-31');
+
+    // Filter by geometry if provided
+    if (clipGeometry) {
+      lulcCollection = lulcCollection.filterBounds(clipGeometry);
+    }
+
+    // Get Sentinel-2 collection
+    let sentinelCollection = ee.ImageCollection('COPERNICUS/S2_HARMONIZED')
+      .filterDate(startDate || '2020-01-01', endDate || '2020-12-31');
+
+    if (clipGeometry) {
+      sentinelCollection = sentinelCollection.filterBounds(clipGeometry);
+    }
+
+    // Get sample image with water band
+    const sampleImg = lulcCollection.filter(ee.Filter.listContains('system:band_names', 'water')).mosaic();
+
+    // Link Sentinel with LULC
+    const linkedCol = sentinelCollection.linkCollection(lulcCollection, sampleImg.bandNames());
+
+    // Get first linked image and clip
+    let linkedImg = ee.Image(linkedCol.first());
+    if (clipGeometry) {
+      linkedImg = linkedImg.clip(clipGeometry);
+    }
+
+    // Create RGB visualization
+    const dwRgb = linkedImg
+      .select('label')
+      .visualize({ min: 0, max: 8, palette: VIS_PALETTE })
+      .divide(255);
+
+    // Calculate top probability for hillshade
+    const top1Prob = linkedImg.select(CLASS_NAMES).reduce(ee.Reducer.max());
+    
+    // Create hillshade effect
+    const top1ProbHillshade = ee.Terrain.hillshade(top1Prob.multiply(100))
+      .divide(255);
+
+    // Apply hillshade to RGB
+    const dwRgbHillshade = dwRgb.multiply(top1ProbHillshade);
+
+    // Visualization parameters for the final image
     const visParams = {
-      min: 1,
-      max: 17,
-      palette: [
-        '05450a','086a10','54a708','78d203','009900','c6b044','dcd159',
-        'dade48','fbff13','b6ff05','27ff87','c24f44','a5a5a5','ff6d4c',
-        '69fff8','f9ffa4','1c0dff'
-      ]
+      min: 0,
+      max: 0.65
     };
 
-    // Generate map tiles
-    image.getMap(visParams, (mapInfo) => {
+    // Generate map tiles (fast response)
+    dwRgbHillshade.getMap(visParams, (mapInfo) => {
       if (mapInfo && mapInfo.urlFormat) {
+        console.log('✅ LULC tiles generated successfully');
         res.json({
           success: true,
-          tileUrl: mapInfo.urlFormat
+          tileUrl: mapInfo.urlFormat,
+          legend: {
+            classes: CLASS_NAMES,
+            palette: VIS_PALETTE
+          }
         });
       } else {
         res.status(500).json({
@@ -172,11 +215,153 @@ app.post('/api/gee/lulc-tiles', async (req, res) => {
   }
 });
 
+// LULC Area Statistics (Separate endpoint for detailed analysis)
+app.post('/api/gee/lulc-stats', async (req, res) => {
+  try {
+    if (!isInitialized) {
+      return res.status(503).json({
+        error: 'Earth Engine not initialized yet'
+      });
+    }
+
+    const { startDate, endDate, geometry } = req.body;
+
+
+    // Build geometry if provided and valid
+    let clipGeometry = null;
+    if (geometry && geometry.coordinates) {
+      clipGeometry = ee.Geometry(geometry);
+    }
+
+    if (!clipGeometry) {
+      return res.status(400).json({
+        error: 'Geometry is required for area statistics'
+      });
+    }
+
+    // Define class names and palette
+    const CLASS_NAMES = [
+      'water', 'trees', 'grass', 'flooded_vegetation', 'crops',
+      'shrub_and_scrub', 'built', 'bare', 'snow_and_ice'
+    ];
+    
+    const VIS_PALETTE = [
+      '419bdf', '397d49', '88b053', '7a87c6', 'e49635', 
+      'dfc35a', 'c4281b', 'a59b8f', 'b39fe1'
+    ];
+
+    // Get Dynamic World LULC collection
+    let lulcCollection = ee.ImageCollection("GOOGLE/DYNAMICWORLD/V1")
+      .filterDate(startDate || '2020-01-01', endDate || '2020-12-31')
+      .filterBounds(clipGeometry);
+
+    // Get Sentinel-2 collection
+    let sentinelCollection = ee.ImageCollection('COPERNICUS/S2_HARMONIZED')
+      .filterDate(startDate || '2020-01-01', endDate || '2020-12-31')
+      .filterBounds(clipGeometry);
+
+    // Get sample image with water band
+    const sampleImg = lulcCollection.filter(ee.Filter.listContains('system:band_names', 'water')).mosaic();
+
+    // Link Sentinel with LULC
+    const linkedCol = sentinelCollection.linkCollection(lulcCollection, sampleImg.bandNames());
+
+    // Get first linked image and clip
+    const linkedImg = ee.Image(linkedCol.first()).clip(clipGeometry);
+
+    // Calculate area statistics for each land cover class
+    const labelImg = linkedImg.select('label');
+    const pixelArea = ee.Image.pixelArea();
+    
+    // Calculate area for each class (0-8)
+    const areaCalculations = [];
+    for (let i = 0; i < 9; i++) {
+      const classArea = labelImg.eq(i).multiply(pixelArea).reduceRegion({
+        reducer: ee.Reducer.sum(),
+        geometry: clipGeometry,
+        scale: 10, // 10m resolution for Dynamic World
+        maxPixels: 1e13,
+        bestEffort: true
+      });
+      areaCalculations.push(classArea);
+    }
+
+    // Calculate all areas
+    Promise.all(areaCalculations.map(area => 
+      new Promise((resolve, reject) => {
+        area.evaluate((result, error) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve(result);
+          }
+        });
+      })
+    )).then(results => {
+      // Process area results
+      const areaStats = CLASS_NAMES.map((className, index) => {
+        const areaInSqMeters = results[index]?.label || 0;
+        const areaInSqKm = areaInSqMeters / 1000000; // Convert to km²
+        const areaInHectares = areaInSqMeters / 10000; // Convert to hectares
+        
+        return {
+          class: className,
+          label: index,
+          color: VIS_PALETTE[index],
+          areaInSqMeters: parseFloat(areaInSqMeters.toFixed(2)),
+          areaInSqKm: parseFloat(areaInSqKm.toFixed(4)),
+          areaInHectares: parseFloat(areaInHectares.toFixed(2))
+        };
+      });
+
+      // Calculate total area
+      const totalArea = areaStats.reduce((sum, stat) => sum + stat.areaInSqMeters, 0);
+
+      // Add percentage to each class
+      const areaStatsWithPercentage = areaStats.map(stat => ({
+        ...stat,
+        percentage: totalArea > 0 ? parseFloat(((stat.areaInSqMeters / totalArea) * 100).toFixed(2)) : 0
+      }));
+
+      // Filter out classes with 0 area for cleaner data
+      const nonZeroStats = areaStatsWithPercentage.filter(stat => stat.areaInSqMeters > 0);
+
+
+      res.json({
+        success: true,
+        statistics: {
+          classes: nonZeroStats,
+          allClasses: areaStatsWithPercentage, // Include all classes for reference
+          totalAreaSqMeters: parseFloat(totalArea.toFixed(2)),
+          totalAreaSqKm: parseFloat((totalArea / 1000000).toFixed(4)),
+          totalAreaHectares: parseFloat((totalArea / 10000).toFixed(2)),
+          dateRange: {
+            startDate: startDate || '2020-01-01',
+            endDate: endDate || '2020-12-31'
+          }
+        }
+      });
+    }).catch(error => {
+      console.error('❌ Error calculating LULC statistics:', error);
+      res.status(500).json({
+        error: 'Failed to calculate area statistics',
+        details: error.message
+      });
+    });
+
+  } catch (error) {
+    console.error('❌ Error in LULC statistics endpoint:', error);
+    res.status(500).json({
+      error: error.message
+    });
+  }
+});
 
 
 
 
-// Get NDVI tiles
+
+// Get NDVI tiles (updated to use same clipping as Landsat)
 app.post('/api/gee/ndvi-tiles', async (req, res) => {
   try {
     if (!isInitialized) {
@@ -185,24 +370,27 @@ app.post('/api/gee/ndvi-tiles', async (req, res) => {
       });
     }
 
-    const { startDate, endDate, bounds } = req.body;
+    const {startDate, endDate, geometry } = req.body;
 
-    // Create Sentinel-2 image collection
-    const collection = ee.ImageCollection('COPERNICUS/S2_SR')
-      .filterDate(startDate || '2020-06-01', endDate || '2020-09-01')
-      .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 20));
 
-    // If bounds provided, filter by location
-    let filtered = collection;
-    if (bounds) {
-      const geometry = ee.Geometry.Rectangle(bounds);
-      filtered = collection.filterBounds(geometry);
+    
+    // Build geometry if provided and valid
+    let clipGeometry = null;
+    if (geometry && geometry.coordinates) {
+      clipGeometry = ee.Geometry(geometry);
     }
+    
+    // Create Sentinel-2 image collection - EXACTLY like Landsat pattern
+    const medianImage = ee.ImageCollection('COPERNICUS/S2_SR')
+      .filterDate(startDate || '2020-01-01', endDate || '2020-12-31')
+      .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 20))
+      .median()
+      .clip(clipGeometry);
 
-    const median = filtered.median();
+    // Calculate NDVI from clipped median
+    const ndvi = medianImage.normalizedDifference(['B8', 'B4']).rename('NDVI');
 
-    // Calculate NDVI
-    const ndvi = median.normalizedDifference(['B8', 'B4']).rename('NDVI');
+    console.log('NDVI image prepared and clipped');
 
     // Visualization parameters
     const visParams = {
@@ -214,11 +402,13 @@ app.post('/api/gee/ndvi-tiles', async (req, res) => {
     // Get map ID
     ndvi.getMap(visParams, (mapInfo) => {
       if (mapInfo && mapInfo.urlFormat) {
+        console.log('✅ NDVI tiles generated successfully');
         res.json({
           success: true,
           tileUrl: mapInfo.urlFormat
         });
       } else {
+        console.log('❌ Failed to generate NDVI map info');
         res.status(500).json({
           error: 'Failed to generate NDVI tiles'
         });
@@ -226,7 +416,7 @@ app.post('/api/gee/ndvi-tiles', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error generating NDVI tiles:', error);
+    console.error('❌ Error generating NDVI tiles:', error);
     res.status(500).json({
       error: error.message
     });
@@ -242,8 +432,18 @@ app.post('/api/gee/elevation-tiles', async (req, res) => {
       });
     }
 
-    // Load SRTM elevation data
-    const elevation = ee.Image('USGS/SRTMGL1_003');
+    const { geometry } = req.body;
+
+    console.log('Received elevation tile request with params:', { geometry });
+
+    // Build geometry if provided and valid
+    let clipGeometry = null;
+    if (geometry && geometry.coordinates) {
+      clipGeometry = ee.Geometry(geometry);
+    }
+
+    // Load SRTM elevation data and clip (same pattern as Landsat)
+    const elevation = ee.Image('USGS/SRTMGL1_003').clip(clipGeometry);
 
     // Visualization parameters
     const visParams = {
@@ -255,6 +455,7 @@ app.post('/api/gee/elevation-tiles', async (req, res) => {
     // Get map ID
     elevation.getMap(visParams, (mapInfo) => {
       if (mapInfo && mapInfo.urlFormat) {
+        console.log('✅ Elevation tiles generated successfully');
         res.json({
           success: true,
           tileUrl: mapInfo.urlFormat
