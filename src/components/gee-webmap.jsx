@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
-import { PieChart, Pie, BarChart, Bar, Cell, ResponsiveContainer, Legend, Tooltip, XAxis, YAxis } from 'recharts';
 import "maplibre-gl/dist/maplibre-gl.css";
 
 const API_BASE_URL = 'http://localhost:5000/api';
@@ -40,6 +39,165 @@ function GeeWebMap({ style = {}, onReady }) {
   // Current boundary geometry
   const [currentBoundary, setCurrentBoundary] = useState(null);
   const [selectedLocation, setSelectedLocation] = useState('');
+
+  // Road network toggle
+  const [showRoads, setShowRoads] = useState(false);
+  const [isLoadingRoads, setIsLoadingRoads] = useState(false);
+
+  // Analytics panel visibility
+  const [showAnalytics, setShowAnalytics] = useState(true);
+
+  // Chart refs
+  const pieChartRef = useRef(null);
+  const barChartRef = useRef(null);
+  const [plotlyLoaded, setPlotlyLoaded] = useState(false);
+
+  // Load Plotly from CDN if not available
+  useEffect(() => {
+    if (window.Plotly) {
+      setPlotlyLoaded(true);
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.27.0/plotly.min.js';
+    script.async = true;
+    script.onload = () => {
+      console.log('✅ Plotly loaded from CDN');
+      setPlotlyLoaded(true);
+    };
+    script.onerror = () => {
+      console.error('❌ Failed to load Plotly from CDN');
+    };
+    document.head.appendChild(script);
+
+    return () => {
+      if (script.parentNode) {
+        script.parentNode.removeChild(script);
+      }
+    };
+  }, []);
+
+  // Render charts when stats change
+  useEffect(() => {
+    if (!lulcStats || !pieChartRef.current || !barChartRef.current || !plotlyLoaded || !window.Plotly) return;
+
+    const plotlyLib = window.Plotly;
+
+    const chartData = lulcStats.classes.map(cls => ({
+      ...cls,
+      name: cls.class.replace(/_/g, ' '),
+      value: cls.percentage
+    }));
+
+    // Prepare data for 3D Pie Chart
+    const pieLabels = chartData.map(cls => cls.name);
+    const pieValues = chartData.map(cls => cls.percentage);
+    const pieColors = chartData.map(cls => `#${cls.color}`);
+    const pieText = chartData.map(cls => 
+      `${cls.name}<br>${cls.percentage.toFixed(1)}%<br>${cls.areaInSqKm.toFixed(2)} km²`
+    );
+
+    // Render Pie Chart with connector lines
+    plotlyLib.newPlot(pieChartRef.current, [{
+      type: 'pie',
+      labels: pieLabels,
+      values: pieValues,
+      marker: {
+        colors: pieColors,
+        line: {
+          color: '#1a1a1a',
+          width: 2
+        }
+      },
+      text: pieText,
+      textposition: 'outside',
+      textfont: {
+        color: '#ffffff',
+        size: 11
+      },
+      hoverinfo: 'label+percent+text',
+      hole: 0.3,
+      pull: 0.05,
+      direction: 'clockwise',
+      sort: false,
+      automargin: true,
+      texttemplate: '%{label}<br>%{percent}',
+      insidetextorientation: 'radial'
+    }], {
+      height: 300,
+      paper_bgcolor: 'rgba(0,0,0,0)',
+      plot_bgcolor: 'rgba(0,0,0,0)',
+      margin: { t: 10, b: 10, l: 10, r: 10 },
+      showlegend: false,
+      font: {
+        color: '#ffffff',
+        family: 'system-ui, -apple-system, sans-serif'
+      },
+      hoverlabel: {
+        bgcolor: 'rgba(20, 20, 20, 0.95)',
+        bordercolor: '#4285f4',
+        font: { color: '#ffffff', size: 12 }
+      }
+    }, {
+      displayModeBar: false,
+      responsive: true
+    });
+
+    // Render 3D Bar Chart
+    plotlyLib.newPlot(barChartRef.current, [{
+      type: 'bar',
+      x: chartData.map(cls => cls.name),
+      y: chartData.map(cls => cls.areaInSqKm),
+      marker: {
+        color: chartData.map(cls => `#${cls.color}`),
+        line: {
+          color: '#1a1a1a',
+          width: 1.5
+        },
+        opacity: 0.9
+      },
+      text: chartData.map(cls => `${cls.areaInSqKm.toFixed(2)} km²`),
+      textposition: 'auto',
+      textfont: {
+        color: '#ffffff',
+        size: 10
+      },
+      hovertemplate: '<b>%{x}</b><br>' +
+        'Area: %{y:.2f} km²<br>' +
+        '<extra></extra>'
+    }], {
+      height: 250,
+      paper_bgcolor: 'rgba(0,0,0,0)',
+      plot_bgcolor: 'rgba(0,0,0,0)',
+      margin: { t: 20, b: 80, l: 50, r: 20 },
+      xaxis: {
+        tickangle: -45,
+        color: '#999',
+        gridcolor: 'rgba(255,255,255,0.1)',
+        tickfont: { size: 10 }
+      },
+      yaxis: {
+        title: 'Area (km²)',
+        color: '#999',
+        gridcolor: 'rgba(255,255,255,0.1)',
+        tickfont: { size: 10 }
+      },
+      font: {
+        color: '#ffffff',
+        family: 'system-ui, -apple-system, sans-serif'
+      },
+      hoverlabel: {
+        bgcolor: 'rgba(20, 20, 20, 0.95)',
+        bordercolor: '#4285f4',
+        font: { color: '#ffffff', size: 12 }
+      }
+    }, {
+      displayModeBar: false,
+      responsive: true
+    });
+
+  }, [lulcStats, plotlyLoaded]);
 
   // Check backend health
   useEffect(() => {
@@ -329,38 +487,138 @@ function GeeWebMap({ style = {}, onReady }) {
     }
   };
 
-  // Custom tooltip for charts
-  const CustomTooltip = ({ active, payload }) => {
-    if (active && payload && payload.length) {
-      const data = payload[0].payload;
-      return (
-        <div style={{
-          backgroundColor: 'rgba(20, 20, 20, 0.95)',
-          border: `2px solid ${data.color}`,
-          borderRadius: '8px',
-          padding: '12px',
-          boxShadow: '0 4px 12px rgba(0,0,0,0.4)'
-        }}>
-          <p style={{ color: '#fff', fontWeight: 'bold', margin: '0 0 8px 0', textTransform: 'capitalize' }}>
-            {data.class.replace(/_/g, ' ')}
-          </p>
-          <p style={{ color: data.color, margin: '4px 0', fontSize: '14px' }}>
-            Area: {data.areaInSqKm.toFixed(2)} km²
-          </p>
-          <p style={{ color: data.color, margin: '4px 0', fontSize: '14px' }}>
-            {data.areaInHectares.toFixed(0)} hectares
-          </p>
-          <p style={{ color: data.color, margin: '4px 0', fontSize: '16px', fontWeight: 'bold' }}>
-            {data.percentage.toFixed(1)}%
-          </p>
-        </div>
-      );
+  const toggleRoadNetwork = async () => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    if (showRoads) {
+      // Remove road layers
+      if (map.getLayer('roads-outline')) map.removeLayer('roads-outline');
+      if (map.getLayer('roads-line')) map.removeLayer('roads-line');
+      if (map.getSource('roads')) map.removeSource('roads');
+      setShowRoads(false);
+      return;
     }
-    return null;
+
+    // Add road network
+    setIsLoadingRoads(true);
+    try {
+      const bounds = map.getBounds();
+      const bbox = [
+        bounds.getWest(),
+        bounds.getSouth(),
+        bounds.getEast(),
+        bounds.getNorth()
+      ].join(',');
+
+      console.log('🛣️ Fetching road network...');
+      
+      // Fetch roads from Overpass API
+      const query = `
+        [out:json][timeout:25];
+        (
+          way["highway"~"motorway|trunk|primary|secondary|tertiary|residential|unclassified"](${bounds.getSouth()},${bounds.getWest()},${bounds.getNorth()},${bounds.getEast()});
+        );
+        out geom;
+      `;
+
+      const response = await fetch('https://overpass-api.de/api/interpreter', {
+        method: 'POST',
+        body: query
+      });
+
+      const data = await response.json();
+      
+      // Convert Overpass data to GeoJSON
+      const features = data.elements
+        .filter(element => element.type === 'way' && element.geometry)
+        .map(way => ({
+          type: 'Feature',
+          properties: {
+            highway: way.tags.highway,
+            name: way.tags.name || 'Unnamed Road'
+          },
+          geometry: {
+            type: 'LineString',
+            coordinates: way.geometry.map(node => [node.lon, node.lat])
+          }
+        }));
+
+      const geojson = {
+        type: 'FeatureCollection',
+        features: features
+      };
+
+      console.log(`✅ Loaded ${features.length} road segments`);
+
+      // Add source
+      map.addSource('roads', {
+        type: 'geojson',
+        data: geojson
+      });
+
+      // Add outline layer
+      map.addLayer({
+        id: 'roads-outline',
+        type: 'line',
+        source: 'roads',
+        paint: {
+          'line-color': '#000',
+          'line-width': [
+            'match',
+            ['get', 'highway'],
+            ['motorway', 'trunk'], 5,
+            ['primary'], 4,
+            ['secondary'], 3.5,
+            ['tertiary'], 3,
+            2.5
+          ],
+          'line-opacity': 0.8
+        }
+      });
+
+      // Add main road layer
+      map.addLayer({
+        id: 'roads-line',
+        type: 'line',
+        source: 'roads',
+        paint: {
+          'line-color': [
+            'match',
+            ['get', 'highway'],
+            ['motorway', 'trunk'], '#f39c12',
+            ['primary'], '#e74c3c',
+            ['secondary'], '#3498db',
+            ['tertiary'], '#2ecc71',
+            '#95a5a6'
+          ],
+          'line-width': [
+            'match',
+            ['get', 'highway'],
+            ['motorway', 'trunk'], 4,
+            ['primary'], 3,
+            ['secondary'], 2.5,
+            ['tertiary'], 2,
+            1.5
+          ],
+          'line-opacity': 0.9
+        }
+      });
+
+      setShowRoads(true);
+      setIsLoadingRoads(false);
+
+    } catch (err) {
+      console.error('❌ Failed to load road network:', err);
+      setIsLoadingRoads(false);
+      alert('Failed to load road network. Please try again.');
+    }
   };
 
   // Render analytics panel
   const renderAnalyticsPanel = () => {
+    if (!showAnalytics) return null;
+
     if (!selectedLocation) {
       return (
         <div style={analyticsPanelStyle}>
@@ -450,9 +708,47 @@ function GeeWebMap({ style = {}, onReady }) {
         <div style={{ padding: '20px', overflowY: 'auto', height: '100%' }}>
           {/* Header */}
           <div style={{ marginBottom: '24px' }}>
-            <h3 style={{ color: '#fff', marginBottom: '8px', fontSize: '18px', fontWeight: '600' }}>
-              📊 {selectedLocation}
-            </h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+              <h3 style={{ color: '#fff', margin: 0, fontSize: '18px', fontWeight: '600' }}>
+                📊 {selectedLocation}
+              </h3>
+              <button
+                onClick={toggleRoadNetwork}
+                disabled={isLoadingRoads}
+                style={{
+                  backgroundColor: showRoads ? 'rgba(52, 168, 83, 0.15)' : 'rgba(255, 255, 255, 0.05)',
+                  color: showRoads ? '#34a853' : '#999',
+                  border: showRoads ? '1px solid rgba(52, 168, 83, 0.3)' : '1px solid rgba(255, 255, 255, 0.1)',
+                  borderRadius: '6px',
+                  padding: '6px 12px',
+                  fontSize: '12px',
+                  fontWeight: '500',
+                  cursor: isLoadingRoads ? 'not-allowed' : 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  transition: 'all 0.2s ease',
+                  opacity: isLoadingRoads ? 0.6 : 1
+                }}
+                onMouseEnter={(e) => {
+                  if (!isLoadingRoads) {
+                    e.currentTarget.style.backgroundColor = showRoads ? 'rgba(52, 168, 83, 0.25)' : 'rgba(255, 255, 255, 0.08)';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (!isLoadingRoads) {
+                    e.currentTarget.style.backgroundColor = showRoads ? 'rgba(52, 168, 83, 0.15)' : 'rgba(255, 255, 255, 0.05)';
+                  }
+                }}
+              >
+                <span style={{ fontSize: '14px' }}>
+                  {isLoadingRoads ? '⏳' : '🛣️'}
+                </span>
+                <span>
+                  {isLoadingRoads ? 'Loading...' : showRoads ? 'Roads' : 'Roads'}
+                </span>
+              </button>
+            </div>
             <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
               <div style={statCardStyle}>
                 <div style={{ color: '#4285f4', fontSize: '24px', fontWeight: 'bold' }}>
@@ -469,57 +765,20 @@ function GeeWebMap({ style = {}, onReady }) {
             </div>
           </div>
 
-          {/* Pie Chart */}
+          {/* 3D Pie Chart */}
           <div style={{ marginBottom: '24px' }}>
             <h4 style={{ color: '#fff', fontSize: '14px', marginBottom: '12px', fontWeight: '500' }}>
-              Distribution Overview
+              Distribution Overview (3D)
             </h4>
-            <ResponsiveContainer width="100%" height={250}>
-              <PieChart>
-                <Pie
-                  data={chartData}
-                  cx="50%"
-                  cy="50%"
-                  labelLine={false}
-                  label={({ name, percentage }) => `${name}: ${percentage.toFixed(1)}%`}
-                  outerRadius={80}
-                  fill="#8884d8"
-                  dataKey="value"
-                  animationDuration={800}
-                  animationBegin={0}
-                >
-                  {chartData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={`#${entry.color}`} />
-                  ))}
-                </Pie>
-                <Tooltip content={<CustomTooltip />} />
-              </PieChart>
-            </ResponsiveContainer>
+            <div ref={pieChartRef} style={{ width: '100%' }} />
           </div>
 
-          {/* Bar Chart */}
+          {/* 3D Bar Chart */}
           <div style={{ marginBottom: '24px' }}>
             <h4 style={{ color: '#fff', fontSize: '14px', marginBottom: '12px', fontWeight: '500' }}>
-              Area Comparison (km²)
+              Area Comparison (3D)
             </h4>
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={chartData} margin={{ top: 5, right: 5, left: 5, bottom: 5 }}>
-                <XAxis 
-                  dataKey="name" 
-                  tick={{ fill: '#999', fontSize: 11 }}
-                  angle={-45}
-                  textAnchor="end"
-                  height={80}
-                />
-                <YAxis tick={{ fill: '#999', fontSize: 11 }} />
-                <Tooltip content={<CustomTooltip />} />
-                <Bar dataKey="areaInSqKm" animationDuration={800} radius={[8, 8, 0, 0]}>
-                  {chartData.map((entry, index) => (
-                    <Cell key={`bar-${index}`} fill={`#${entry.color}`} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
+            <div ref={barChartRef} style={{ width: '100%' }} />
           </div>
 
           {/* Detailed List */}
@@ -808,6 +1067,39 @@ function GeeWebMap({ style = {}, onReady }) {
           {status === "ready" && <span style={{ color: '#34a853' }}>✅ Ready</span>}
           {status === "error" && <span style={{ color: '#ea4335' }}>❌ Error</span>}
         </div>
+      )}
+
+      {/* Analytics Panel Toggle */}
+      {isBackendReady && (
+        <button
+          onClick={() => setShowAnalytics(!showAnalytics)}
+          style={{
+            position: "absolute",
+            top: "10px",
+            left: showAnalytics ? "440px" : "10px",
+            zIndex: 1000,
+            backgroundColor: "rgba(20, 20, 20, 0.95)",
+            color: "#fff",
+            border: "1px solid rgba(255, 255, 255, 0.1)",
+            borderRadius: "8px",
+            padding: "10px 12px",
+            fontSize: "18px",
+            cursor: "pointer",
+            boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+            transition: "all 0.3s ease"
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.transform = "scale(1.05)";
+            e.currentTarget.style.backgroundColor = "rgba(30, 30, 30, 0.95)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.transform = "scale(1)";
+            e.currentTarget.style.backgroundColor = "rgba(20, 20, 20, 0.95)";
+          }}
+          title={showAnalytics ? "Hide Analytics" : "Show Analytics"}
+        >
+          {showAnalytics ? "◀" : "📊"}
+        </button>
       )}
     </div>
   );

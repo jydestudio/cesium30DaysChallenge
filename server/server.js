@@ -148,7 +148,7 @@ app.post('/api/gee/lulc-tiles', async (req, res) => {
 
     // Get Sentinel-2 collection
     let sentinelCollection = ee.ImageCollection('COPERNICUS/S2_HARMONIZED')
-      .filterDate(startDate || '2020-01-01', endDate || '2020-12-31');
+      .filterDate(startDate || '2025-01-01', endDate || '2020-12-31');
 
     if (clipGeometry) {
       sentinelCollection = sentinelCollection.filterBounds(clipGeometry);

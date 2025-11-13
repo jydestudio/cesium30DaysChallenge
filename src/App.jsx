@@ -3,6 +3,7 @@ import AIChatBox from './components/AIChatBox';
 import CesiumGlobe from './components/CesiumGlobe';
 import MapLibreMap from './components/maplibre.jsx';
 import GeeWebMap from './components/gee-webmap.jsx';
+import WindGlobe from './components/airAnimation.jsx'
 import { Cartesian3, Color } from 'cesium';
 
 function App() {
@@ -25,23 +26,28 @@ function App() {
 
     return (
         <div style={{ display: 'flex', height: '100vh', width: '100vw' }}>
-            {/* <div style={{ flex: 1, display: 'none'}}>
+            {/* <div style={{ flex: 1}}>
                 <CesiumGlobe markers={markers} />
-            </div> */}
+            </div>
             
             {/* Chat box as a sidebar on the right */}
-            {/* <div style={{ width: '420px', height: '100%', display: 'none'}}>
+            {/* <div style={{ width: '420px', height: '100%'}}>
                 <AIChatBox addMarker={addMarker}/>
-            </div> */}
+            </div>  */}
 
             {/* <div style={{ width: '100%', height: '100%'}}>
                 <MapLibreMap/>
             </div> */}
 
             {/* i don't understand shit */}
-            <div style={{ width: '100%', height: '100%'}}>
+            {/* <div style={{ width: '100%', height: '100%'}}>
                 <GeeWebMap/>
+            </div>  */}
+
+            <div style={{ width: '100%', height: '100%'}}>
+                <WindGlobe/>
             </div> 
+
         </div>
     );
 }
