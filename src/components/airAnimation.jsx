@@ -16,11 +16,11 @@ const WindMap = () => {
     OPACITY_FADE: 0.90,  // Controls trail length (higher = longer trail)
     SPEED: 0.1,  // Reduced for real wind data
     COLORS: [
-      'rgba(255, 255, 255, 0.8)',  // White (fast wind)
-      'rgba(100, 150, 255, 0.6)',  // Light blue (medium wind)
-      'rgba(50, 100, 200, 0.5)'    // Blue (slow wind)
+      'rgba(255, 0, 0, 0.8)',  // White (fast wind)
+      'rgba(200, 255, 0, 1)',  // Light blue (medium wind)
+      'rgba(17, 79, 202, 0.5)'    // Blue (slow wind)
     ],
-    OPENWEATHER_API_KEY: 'YOUR_API_KEY_HERE' // Replace with your OpenWeatherMap API key
+    OPENWEATHER_API_KEY: '4a8602e18c19a44f872095208acbc7f3' // Replace with your OpenWeatherMap API key
   };
 
   // --- 1. Fetch Real Wind Data from OpenWeatherMap ---
@@ -134,13 +134,14 @@ const WindMap = () => {
     // 1. Initialize Map with Globe Projection
     const map = new maplibregl.Map({
       container: mapContainer.current,
-      style: 'https://demotiles.maplibre.org/style.json',
+      style: 'https://tiles.basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
       center: [0, 20],
       zoom: 1.5,
       pitch: 0,
       renderWorldCopies: false,
       antialias: true
     });
+
 
     mapRef.current = map;
 

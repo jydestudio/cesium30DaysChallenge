@@ -2,8 +2,10 @@ import React, { useState } from 'react';
 import AIChatBox from './components/AIChatBox';
 import CesiumGlobe from './components/CesiumGlobe';
 import MapLibreMap from './components/maplibre.jsx';
-import GeeWebMap from './components/gee-webmap.jsx';
-import WindGlobe from './components/airAnimation.jsx'
+// import GeeWebMap from './components/gee-webmap.jsx';
+import WindGlobe from './components/airAnimation.jsx';
+import FuturisticMap from './components/2051map.jsx';
+import OSMExplorer from './components/osmExplorer.jsx';
 import { Cartesian3, Color } from 'cesium';
 
 function App() {
@@ -45,7 +47,7 @@ function App() {
             </div>  */}
 
             <div style={{ width: '100%', height: '100%'}}>
-                <WindGlobe/>
+                <OSMExplorer/>
             </div> 
 
         </div>
