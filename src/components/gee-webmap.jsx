@@ -1,21 +1,57 @@
 import React, { useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
-import { PieChart, Pie, BarChart, Bar, Cell, ResponsiveContainer, Legend, Tooltip, XAxis, YAxis } from 'recharts';
+import { PieChart, Pie, BarChart, Bar, Cell, ResponsiveContainer, Legend, Tooltip, XAxis, YAxis, LineChart, Line } from 'recharts';
 import "maplibre-gl/dist/maplibre-gl.css";
 
 const API_BASE_URL = 'http://localhost:5000/api';
 
-// Enhanced color palette matching LULC classes
-const LULC_COLORS = {
-  water: '#419bdf',
-  trees: '#397d49',
-  grass: '#88b053',
-  flooded_vegetation: '#7a87c6',
-  crops: '#e49635',
-  shrub_and_scrub: '#dfc35a',
-  built: '#c4281b',
-  bare: '#a59b8f',
-  snow_and_ice: '#b39fe1'
+// Analysis types configuration
+const ANALYSIS_TYPES = {
+  LULC: {
+    id: 'lulc',
+    name: 'Land Cover',
+    icon: '🌍',
+    tilesEndpoint: '/gee/lulc-tiles',
+    statsEndpoint: '/gee/lulc-stats',
+    description: 'Analyze land use and land cover patterns',
+    hasStats: true
+  },
+  BURN: {
+    id: 'burn',
+    name: 'Burn Severity',
+    icon: '🔥',
+    tilesEndpoint: '/gee/burn-severity-tiles',
+    statsEndpoint: '/gee/burn-severity-stats',
+    description: 'Analyze wildfire burn severity using dNBR',
+    hasStats: true
+  },
+  NDVI: {
+    id: 'ndvi',
+    name: 'Vegetation (NDVI)',
+    icon: '🌱',
+    tilesEndpoint: '/gee/ndvi-tiles',
+    statsEndpoint: null,
+    description: 'Normalized Difference Vegetation Index',
+    hasStats: false
+  },
+  ELEVATION: {
+    id: 'elevation',
+    name: 'Elevation',
+    icon: '⛰️',
+    tilesEndpoint: '/gee/elevation-tiles',
+    statsEndpoint: null,
+    description: 'Digital elevation model',
+    hasStats: false
+  },
+  LANDSAT: {
+    id: 'landsat',
+    name: 'Landsat RGB',
+    icon: '🛰️',
+    tilesEndpoint: '/gee/landsat-tiles',
+    statsEndpoint: null,
+    description: 'True color satellite imagery',
+    hasStats: false
+  }
 };
 
 function GeeWebMap({ style = {}, onReady }) {
@@ -25,10 +61,15 @@ function GeeWebMap({ style = {}, onReady }) {
   const [error, setError] = useState(null);
   const [isBackendReady, setIsBackendReady] = useState(false);
 
+  // Analysis selection
+  const [selectedAnalysis, setSelectedAnalysis] = useState(ANALYSIS_TYPES.LULC);
+  const [showAnalysisMenu, setShowAnalysisMenu] = useState(false);
+
   // Stats state
-  const [lulcStats, setLulcStats] = useState(null);
+  const [analysisStats, setAnalysisStats] = useState(null);
   const [isLoadingStats, setIsLoadingStats] = useState(false);
   const [statsError, setStatsError] = useState(null);
+  const [showChartsPanel, setShowChartsPanel] = useState(true);
 
   // Search state
   const [searchQuery, setSearchQuery] = useState('');
@@ -40,6 +81,16 @@ function GeeWebMap({ style = {}, onReady }) {
   // Current boundary geometry
   const [currentBoundary, setCurrentBoundary] = useState(null);
   const [selectedLocation, setSelectedLocation] = useState('');
+
+  // Burn severity specific dates
+  const [preFireDates, setPreFireDates] = useState({
+    start: '2014-08-07',
+    end: '2014-08-08'
+  });
+  const [postFireDates, setPostFireDates] = useState({
+    start: '2015-09-11',
+    end: '2015-09-12'
+  });
 
   // Check backend health
   useEffect(() => {
@@ -188,11 +239,13 @@ function GeeWebMap({ style = {}, onReady }) {
 
         setCurrentBoundary(geojson);
 
-        // Load LULC tiles first (fast)
-        await loadLULCLayer(geojson);
+        // Load analysis layer based on selected type
+        await loadAnalysisLayer(geojson);
 
-        // Then load statistics (slower)
-        loadLULCStats(geojson);
+        // Load statistics if available
+        if (selectedAnalysis.hasStats) {
+          loadAnalysisStats(geojson);
+        }
 
         // Fit bounds
         const bounds = new maplibregl.LngLatBounds();
@@ -218,6 +271,9 @@ function GeeWebMap({ style = {}, onReady }) {
           maxZoom: 15
         });
       } else {
+        setCurrentBoundary(null);
+        await loadAnalysisLayer(null);
+        
         map.flyTo({
           center: [lon, lat],
           zoom: 12,
@@ -236,8 +292,8 @@ function GeeWebMap({ style = {}, onReady }) {
     }
   };
 
-  const loadLULCLayer = async (geometry) => {
-    console.log("🌍 Loading LULC layer");
+  const loadAnalysisLayer = async (geometry) => {
+    console.log(`🌍 Loading ${selectedAnalysis.name} layer`);
     const map = mapInstanceRef.current;
     if (!map) return;
 
@@ -248,14 +304,29 @@ function GeeWebMap({ style = {}, onReady }) {
       if (map.getLayer('gee-layer')) map.removeLayer('gee-layer');
       if (map.getSource('gee-source')) map.removeSource('gee-source');
 
-      const response = await fetch(`${API_BASE_URL}/gee/lulc-tiles`, {
+      const requestBody = {
+        geometry: geometry
+      };
+
+      // Add specific parameters based on analysis type
+      if (selectedAnalysis.id === 'burn') {
+        requestBody.preFireStartDate = preFireDates.start;
+        requestBody.preFireEndDate = preFireDates.end;
+        requestBody.postFireStartDate = postFireDates.start;
+        requestBody.postFireEndDate = postFireDates.end;
+        requestBody.layer = 'dnbr';
+      } else if (selectedAnalysis.id === 'lulc') {
+        requestBody.startDate = '2020-01-01';
+        requestBody.endDate = '2025-12-31';
+      } else {
+        requestBody.startDate = '2020-01-01';
+        requestBody.endDate = '2020-12-31';
+      }
+
+      const response = await fetch(`${API_BASE_URL}${selectedAnalysis.tilesEndpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          startDate: '2020-01-01',
-          endDate: '2025-12-31',
-          geometry: geometry
-        })
+        body: JSON.stringify(requestBody)
       });
 
       const data = await response.json();
@@ -264,7 +335,7 @@ function GeeWebMap({ style = {}, onReady }) {
         throw new Error(data.error || 'Failed to get tiles');
       }
 
-      console.log('✅ Got LULC tile URL');
+      console.log(`✅ Got ${selectedAnalysis.name} tile URL`);
 
       map.addSource('gee-source', {
         type: 'raster',
@@ -286,30 +357,44 @@ function GeeWebMap({ style = {}, onReady }) {
       });
 
       setStatus("ready");
-      console.log('✅ LULC layer loaded successfully');
+      console.log(`✅ ${selectedAnalysis.name} layer loaded successfully`);
 
     } catch (err) {
-      console.error('❌ Failed to load LULC layer:', err);
-      setError(`Failed to load LULC: ${err.message}`);
+      console.error(`❌ Failed to load ${selectedAnalysis.name} layer:`, err);
+      setError(`Failed to load ${selectedAnalysis.name}: ${err.message}`);
       setStatus("error");
     }
   };
 
-  const loadLULCStats = async (geometry) => {
-    console.log("📊 Loading LULC statistics");
+  const loadAnalysisStats = async (geometry) => {
+    if (!selectedAnalysis.hasStats || !selectedAnalysis.statsEndpoint) {
+      return;
+    }
+
+    console.log(`📊 Loading ${selectedAnalysis.name} statistics`);
     setIsLoadingStats(true);
     setStatsError(null);
-    setLulcStats(null);
+    setAnalysisStats(null);
 
     try {
-      const response = await fetch(`${API_BASE_URL}/gee/lulc-stats`, {
+      const requestBody = {
+        geometry: geometry
+      };
+
+      if (selectedAnalysis.id === 'burn') {
+        requestBody.preFireStartDate = preFireDates.start;
+        requestBody.preFireEndDate = preFireDates.end;
+        requestBody.postFireStartDate = postFireDates.start;
+        requestBody.postFireEndDate = postFireDates.end;
+      } else if (selectedAnalysis.id === 'lulc') {
+        requestBody.startDate = '2020-01-01';
+        requestBody.endDate = '2020-12-31';
+      }
+
+      const response = await fetch(`${API_BASE_URL}${selectedAnalysis.statsEndpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          startDate: '2020-01-01',
-          endDate: '2020-12-31',
-          geometry: geometry
-        })
+        body: JSON.stringify(requestBody)
       });
 
       const data = await response.json();
@@ -318,14 +403,29 @@ function GeeWebMap({ style = {}, onReady }) {
         throw new Error(data.error || 'Failed to get statistics');
       }
 
-      console.log('✅ LULC statistics loaded');
-      setLulcStats(data.statistics);
+      console.log(`✅ ${selectedAnalysis.name} statistics loaded`);
+      setAnalysisStats(data.statistics);
       setIsLoadingStats(false);
 
     } catch (err) {
-      console.error('❌ Failed to load LULC statistics:', err);
+      console.error(`❌ Failed to load ${selectedAnalysis.name} statistics:`, err);
       setStatsError(err.message);
       setIsLoadingStats(false);
+    }
+  };
+
+  // Handle analysis type change
+  const handleAnalysisChange = (analysis) => {
+    setSelectedAnalysis(analysis);
+    setShowAnalysisMenu(false);
+    setAnalysisStats(null);
+    
+    // Reload current location with new analysis
+    if (currentBoundary) {
+      loadAnalysisLayer(currentBoundary);
+      if (analysis.hasStats) {
+        loadAnalysisStats(currentBoundary);
+      }
     }
   };
 
@@ -336,22 +436,22 @@ function GeeWebMap({ style = {}, onReady }) {
       return (
         <div style={{
           backgroundColor: 'rgba(20, 20, 20, 0.95)',
-          border: `2px solid ${data.color}`,
+          border: `2px solid ${data.color ? `#${data.color}` : '#4285f4'}`,
           borderRadius: '8px',
           padding: '12px',
           boxShadow: '0 4px 12px rgba(0,0,0,0.4)'
         }}>
           <p style={{ color: '#fff', fontWeight: 'bold', margin: '0 0 8px 0', textTransform: 'capitalize' }}>
-            {data.class.replace(/_/g, ' ')}
+            {data.class ? data.class.replace(/_/g, ' ') : data.name}
           </p>
-          <p style={{ color: data.color, margin: '4px 0', fontSize: '14px' }}>
-            Area: {data.areaInSqKm.toFixed(2)} km²
+          <p style={{ color: data.color ? `#${data.color}` : '#4285f4', margin: '4px 0', fontSize: '14px' }}>
+            Area: {data.areaInSqKm?.toFixed(2)} km²
           </p>
-          <p style={{ color: data.color, margin: '4px 0', fontSize: '14px' }}>
-            {data.areaInHectares.toFixed(0)} hectares
+          <p style={{ color: data.color ? `#${data.color}` : '#4285f4', margin: '4px 0', fontSize: '14px' }}>
+            {data.areaInHectares?.toFixed(0)} hectares
           </p>
-          <p style={{ color: data.color, margin: '4px 0', fontSize: '16px', fontWeight: 'bold' }}>
-            {data.percentage.toFixed(1)}%
+          <p style={{ color: data.color ? `#${data.color}` : '#4285f4', margin: '4px 0', fontSize: '16px', fontWeight: 'bold' }}>
+            {data.percentage?.toFixed(1)}%
           </p>
         </div>
       );
@@ -359,16 +459,151 @@ function GeeWebMap({ style = {}, onReady }) {
     return null;
   };
 
+  // Render charts based on analysis type
+  const renderCharts = () => {
+    if (!analysisStats || !analysisStats.classes) return null;
+
+    const chartData = analysisStats.classes.map(cls => ({
+      ...cls,
+      name: cls.class.replace(/_/g, ' '),
+      value: cls.percentage
+    }));
+
+    return (
+      <>
+        {/* Pie Chart */}
+        <div style={{ marginBottom: '24px' }}>
+          <h4 style={{ color: '#fff', fontSize: '14px', marginBottom: '12px', fontWeight: '500' }}>
+            Distribution Overview
+          </h4>
+          <ResponsiveContainer width="100%" height={250}>
+            <PieChart>
+              <Pie
+                data={chartData}
+                cx="50%"
+                cy="50%"
+                labelLine={false}
+                label={({ name, percentage }) => percentage > 5 ? `${percentage.toFixed(1)}%` : ''}
+                outerRadius={80}
+                fill="#8884d8"
+                dataKey="value"
+                animationDuration={800}
+                animationBegin={0}
+              >
+                {chartData.map((entry, index) => (
+                  <Cell key={`cell-${index}`} fill={`#${entry.color}`} />
+                ))}
+              </Pie>
+              <Tooltip content={<CustomTooltip />} />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* Bar Chart */}
+        <div style={{ marginBottom: '24px' }}>
+          <h4 style={{ color: '#fff', fontSize: '14px', marginBottom: '12px', fontWeight: '500' }}>
+            Area Comparison (km²)
+          </h4>
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={chartData} margin={{ top: 5, right: 5, left: 5, bottom: 5 }}>
+              <XAxis 
+                dataKey="name" 
+                tick={{ fill: '#999', fontSize: 11 }}
+                angle={-45}
+                textAnchor="end"
+                height={80}
+              />
+              <YAxis tick={{ fill: '#999', fontSize: 11 }} />
+              <Tooltip content={<CustomTooltip />} />
+              <Bar dataKey="areaInSqKm" animationDuration={800} radius={[8, 8, 0, 0]}>
+                {chartData.map((entry, index) => (
+                  <Cell key={`bar-${index}`} fill={`#${entry.color}`} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* Detailed List */}
+        <div>
+          <h4 style={{ color: '#fff', fontSize: '14px', marginBottom: '12px', fontWeight: '500' }}>
+            Detailed Breakdown
+          </h4>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {chartData.map((cls, idx) => (
+              <div
+                key={idx}
+                style={{
+                  backgroundColor: 'rgba(255,255,255,0.05)',
+                  borderRadius: '8px',
+                  padding: '12px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '12px',
+                  animation: `slideIn 0.3s ease ${idx * 0.1}s both`
+                }}
+              >
+                <div
+                  style={{
+                    width: '24px',
+                    height: '24px',
+                    borderRadius: '4px',
+                    backgroundColor: `#${cls.color}`,
+                    flexShrink: 0
+                  }}
+                />
+                <div style={{ flex: 1 }}>
+                  <div style={{ color: '#fff', fontSize: '13px', fontWeight: '500', textTransform: 'capitalize' }}>
+                    {cls.name}
+                  </div>
+                  <div style={{ color: '#999', fontSize: '11px' }}>
+                    {cls.areaInHectares?.toFixed(0)} ha
+                  </div>
+                </div>
+                <div style={{ color: `#${cls.color}`, fontSize: '16px', fontWeight: 'bold' }}>
+                  {cls.percentage?.toFixed(1)}%
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </>
+    );
+  };
+
   // Render analytics panel
   const renderAnalyticsPanel = () => {
+    if (!showChartsPanel) return null;
+
     if (!selectedLocation) {
       return (
         <div style={analyticsPanelStyle}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+            <h3 style={{ color: '#fff', fontSize: '16px', fontWeight: '600', margin: 0 }}>
+              {selectedAnalysis.icon} Analytics
+            </h3>
+            <button
+              onClick={() => setShowChartsPanel(false)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#999',
+                fontSize: '20px',
+                cursor: 'pointer',
+                padding: '4px 8px'
+              }}
+            >
+              ×
+            </button>
+          </div>
           <div style={{ textAlign: 'center', padding: '40px 20px' }}>
-            <div style={{ fontSize: '48px', marginBottom: '16px' }}>🌍</div>
-            <h3 style={{ color: '#fff', marginBottom: '8px' }}>Land Cover Analytics</h3>
+            <div style={{ fontSize: '48px', marginBottom: '16px' }}>{selectedAnalysis.icon}</div>
+            <h3 style={{ color: '#fff', marginBottom: '8px' }}>{selectedAnalysis.name}</h3>
             <p style={{ color: '#999', fontSize: '14px' }}>
-              Search and select a location to view detailed land cover statistics
+              {selectedAnalysis.description}
+            </p>
+            <p style={{ color: '#666', fontSize: '13px', marginTop: '16px' }}>
+              Search and select a location to begin analysis
             </p>
           </div>
         </div>
@@ -378,10 +613,25 @@ function GeeWebMap({ style = {}, onReady }) {
     if (isLoadingStats) {
       return (
         <div style={analyticsPanelStyle}>
-          <div style={{ padding: '20px' }}>
-            <h3 style={{ color: '#fff', marginBottom: '16px', fontSize: '18px' }}>
-              📊 {selectedLocation}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+            <h3 style={{ color: '#fff', fontSize: '16px', fontWeight: '600', margin: 0 }}>
+              {selectedAnalysis.icon} {selectedLocation}
             </h3>
+            <button
+              onClick={() => setShowChartsPanel(false)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#999',
+                fontSize: '20px',
+                cursor: 'pointer',
+                padding: '4px 8px'
+              }}
+            >
+              ×
+            </button>
+          </div>
+          <div style={{ padding: '20px' }}>
             <div style={{ textAlign: 'center', padding: '40px 20px' }}>
               <div className="pulse" style={{
                 width: '60px',
@@ -393,18 +643,44 @@ function GeeWebMap({ style = {}, onReady }) {
                 animation: 'spin 1s linear infinite'
               }} />
               <p style={{ color: '#4285f4', fontSize: '16px', fontWeight: '500' }}>
-                Calculating land cover statistics...
+                Calculating statistics...
               </p>
               <p style={{ color: '#666', fontSize: '13px', marginTop: '8px' }}>
                 This may take a few seconds
               </p>
             </div>
-            
-            {/* Skeleton charts */}
-            <div style={{ opacity: 0.3, filter: 'blur(2px)' }}>
-              <div style={{ height: '250px', backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: '8px', marginBottom: '16px' }} />
-              <div style={{ height: '200px', backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: '8px' }} />
-            </div>
+          </div>
+        </div>
+      );
+    }
+
+    if (!selectedAnalysis.hasStats) {
+      return (
+        <div style={analyticsPanelStyle}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+            <h3 style={{ color: '#fff', fontSize: '16px', fontWeight: '600', margin: 0 }}>
+              {selectedAnalysis.icon} {selectedLocation}
+            </h3>
+            <button
+              onClick={() => setShowChartsPanel(false)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#999',
+                fontSize: '20px',
+                cursor: 'pointer',
+                padding: '4px 8px'
+              }}
+            >
+              ×
+            </button>
+          </div>
+          <div style={{ textAlign: 'center', padding: '40px 20px' }}>
+            <div style={{ fontSize: '48px', marginBottom: '16px' }}>📊</div>
+            <h3 style={{ color: '#fff', marginBottom: '8px' }}>No Statistics Available</h3>
+            <p style={{ color: '#999', fontSize: '14px' }}>
+              This analysis type does not have statistical data available
+            </p>
           </div>
         </div>
       );
@@ -413,12 +689,30 @@ function GeeWebMap({ style = {}, onReady }) {
     if (statsError) {
       return (
         <div style={analyticsPanelStyle}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+            <h3 style={{ color: '#fff', fontSize: '16px', fontWeight: '600', margin: 0 }}>
+              {selectedAnalysis.icon} {selectedLocation}
+            </h3>
+            <button
+              onClick={() => setShowChartsPanel(false)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#999',
+                fontSize: '20px',
+                cursor: 'pointer',
+                padding: '4px 8px'
+              }}
+            >
+              ×
+            </button>
+          </div>
           <div style={{ padding: '20px', textAlign: 'center' }}>
             <div style={{ fontSize: '48px', marginBottom: '16px' }}>⚠️</div>
             <h3 style={{ color: '#ea4335', marginBottom: '8px' }}>Error Loading Statistics</h3>
             <p style={{ color: '#999', fontSize: '14px' }}>{statsError}</p>
             <button
-              onClick={() => loadLULCStats(currentBoundary)}
+              onClick={() => loadAnalysisStats(currentBoundary)}
               style={{
                 marginTop: '16px',
                 padding: '10px 20px',
@@ -437,151 +731,121 @@ function GeeWebMap({ style = {}, onReady }) {
       );
     }
 
-    if (!lulcStats) return null;
-
-    const chartData = lulcStats.classes.map(cls => ({
-      ...cls,
-      name: cls.class.replace(/_/g, ' '),
-      value: cls.percentage
-    }));
+    if (!analysisStats) return null;
 
     return (
       <div style={analyticsPanelStyle}>
-        <div style={{ padding: '20px', overflowY: 'auto', height: '100%' }}>
-          {/* Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+          <h3 style={{ color: '#fff', fontSize: '16px', fontWeight: '600', margin: 0 }}>
+            {selectedAnalysis.icon} {selectedLocation}
+          </h3>
+          <button
+            onClick={() => setShowChartsPanel(false)}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: '#999',
+              fontSize: '20px',
+              cursor: 'pointer',
+              padding: '4px 8px'
+            }}
+          >
+            ×
+          </button>
+        </div>
+        <div style={{ padding: '20px', overflowY: 'auto', height: 'calc(100% - 57px)' }}>
+          {/* Summary Stats */}
           <div style={{ marginBottom: '24px' }}>
-            <h3 style={{ color: '#fff', marginBottom: '8px', fontSize: '18px', fontWeight: '600' }}>
-              📊 {selectedLocation}
-            </h3>
             <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
               <div style={statCardStyle}>
                 <div style={{ color: '#4285f4', fontSize: '24px', fontWeight: 'bold' }}>
-                  {lulcStats.totalAreaSqKm.toFixed(2)}
+                  {analysisStats.totalAreaSqKm?.toFixed(2)}
                 </div>
                 <div style={{ color: '#999', fontSize: '12px' }}>km² Total Area</div>
               </div>
               <div style={statCardStyle}>
                 <div style={{ color: '#34a853', fontSize: '24px', fontWeight: 'bold' }}>
-                  {chartData.length}
+                  {analysisStats.classes?.length || 0}
                 </div>
-                <div style={{ color: '#999', fontSize: '12px' }}>Land Types</div>
+                <div style={{ color: '#999', fontSize: '12px' }}>Categories</div>
               </div>
             </div>
           </div>
 
-          {/* Pie Chart */}
-          <div style={{ marginBottom: '24px' }}>
-            <h4 style={{ color: '#fff', fontSize: '14px', marginBottom: '12px', fontWeight: '500' }}>
-              Distribution Overview
-            </h4>
-            <ResponsiveContainer width="100%" height={250}>
-              <PieChart>
-                <Pie
-                  data={chartData}
-                  cx="50%"
-                  cy="50%"
-                  labelLine={false}
-                  label={({ name, percentage }) => `${name}: ${percentage.toFixed(1)}%`}
-                  outerRadius={80}
-                  fill="#8884d8"
-                  dataKey="value"
-                  animationDuration={800}
-                  animationBegin={0}
-                >
-                  {chartData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={`#${entry.color}`} />
-                  ))}
-                </Pie>
-                <Tooltip content={<CustomTooltip />} />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
+          {renderCharts()}
+        </div>
+      </div>
+    );
+  };
 
-          {/* Bar Chart */}
-          <div style={{ marginBottom: '24px' }}>
-            <h4 style={{ color: '#fff', fontSize: '14px', marginBottom: '12px', fontWeight: '500' }}>
-              Area Comparison (km²)
-            </h4>
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={chartData} margin={{ top: 5, right: 5, left: 5, bottom: 5 }}>
-                <XAxis 
-                  dataKey="name" 
-                  tick={{ fill: '#999', fontSize: 11 }}
-                  angle={-45}
-                  textAnchor="end"
-                  height={80}
-                />
-                <YAxis tick={{ fill: '#999', fontSize: 11 }} />
-                <Tooltip content={<CustomTooltip />} />
-                <Bar dataKey="areaInSqKm" animationDuration={800} radius={[8, 8, 0, 0]}>
-                  {chartData.map((entry, index) => (
-                    <Cell key={`bar-${index}`} fill={`#${entry.color}`} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+  // Render analysis menu
+  const renderAnalysisMenu = () => {
+    if (!showAnalysisMenu) return null;
 
-          {/* Detailed List */}
-          <div>
-            <h4 style={{ color: '#fff', fontSize: '14px', marginBottom: '12px', fontWeight: '500' }}>
-              Detailed Breakdown
-            </h4>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {chartData.map((cls, idx) => (
-                <div
-                  key={idx}
-                  style={{
-                    backgroundColor: 'rgba(255,255,255,0.05)',
-                    borderRadius: '8px',
-                    padding: '12px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '12px',
-                    animation: `slideIn 0.3s ease ${idx * 0.1}s both`
-                  }}
-                >
-                  <div
-                    style={{
-                      width: '24px',
-                      height: '24px',
-                      borderRadius: '4px',
-                      backgroundColor: `#${cls.color}`,
-                      flexShrink: 0
-                    }}
-                  />
-                  <div style={{ flex: 1 }}>
-                    <div style={{ color: '#fff', fontSize: '13px', fontWeight: '500', textTransform: 'capitalize' }}>
-                      {cls.name}
-                    </div>
-                    <div style={{ color: '#999', fontSize: '11px' }}>
-                      {cls.areaInHectares.toFixed(0)} ha
-                    </div>
-                  </div>
-                  <div style={{ color: `#${cls.color}`, fontSize: '16px', fontWeight: 'bold' }}>
-                    {cls.percentage.toFixed(1)}%
-                  </div>
-                </div>
-              ))}
-            </div>
+    return (
+      <div style={analysisMenuStyle}>
+        <div style={{ padding: '16px', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <h3 style={{ color: '#fff', fontSize: '16px', fontWeight: '600', margin: 0 }}>
+              Select Analysis
+            </h3>
+            <button
+              onClick={() => setShowAnalysisMenu(false)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#999',
+                fontSize: '20px',
+                cursor: 'pointer',
+                padding: '4px 8px'
+              }}
+            >
+              ×
+            </button>
           </div>
         </div>
-
-        <style>{`
-          @keyframes spin {
-            to { transform: rotate(360deg); }
-          }
-          @keyframes slideIn {
-            from {
-              opacity: 0;
-              transform: translateX(-20px);
-            }
-            to {
-              opacity: 1;
-              transform: translateX(0);
-            }
-          }
-        `}</style>
+        <div style={{ padding: '12px' }}>
+          {Object.values(ANALYSIS_TYPES).map((analysis) => (
+            <div
+              key={analysis.id}
+              onClick={() => handleAnalysisChange(analysis)}
+              style={{
+                padding: '16px',
+                marginBottom: '8px',
+                backgroundColor: selectedAnalysis.id === analysis.id ? 'rgba(66, 133, 244, 0.2)' : 'rgba(255,255,255,0.05)',
+                borderRadius: '12px',
+                cursor: 'pointer',
+                border: selectedAnalysis.id === analysis.id ? '2px solid #4285f4' : '2px solid transparent',
+                transition: 'all 0.2s ease'
+              }}
+              onMouseEnter={(e) => {
+                if (selectedAnalysis.id !== analysis.id) {
+                  e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)';
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (selectedAnalysis.id !== analysis.id) {
+                  e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.05)';
+                }
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <div style={{ fontSize: '32px' }}>{analysis.icon}</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ color: '#fff', fontSize: '15px', fontWeight: '600', marginBottom: '4px' }}>
+                    {analysis.name}
+                  </div>
+                  <div style={{ color: '#999', fontSize: '12px' }}>
+                    {analysis.description}
+                  </div>
+                </div>
+                {selectedAnalysis.id === analysis.id && (
+                  <div style={{ color: '#4285f4', fontSize: '20px' }}>✓</div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     );
   };
@@ -615,6 +879,23 @@ function GeeWebMap({ style = {}, onReady }) {
     top: "10px",
     left: "10px",
     width: "420px",
+    maxHeight: "calc(100vh - 20px)",
+    backgroundColor: "rgba(20, 20, 20, 0.95)",
+    borderRadius: "16px",
+    boxShadow: "0 8px 32px rgba(0, 0, 0, 0.6)",
+    backdropFilter: "blur(20px)",
+    border: "1px solid rgba(255, 255, 255, 0.1)",
+    zIndex: 999,
+    overflow: "hidden",
+    display: 'flex',
+    flexDirection: 'column'
+  };
+
+  const analysisMenuStyle = {
+    position: "absolute",
+    top: "10px",
+    right: "10px",
+    width: "320px",
     maxHeight: "calc(100vh - 20px)",
     backgroundColor: "rgba(20, 20, 20, 0.95)",
     borderRadius: "16px",
@@ -698,6 +979,25 @@ function GeeWebMap({ style = {}, onReady }) {
     color: "#fff"
   };
 
+  const floatingButtonStyle = {
+    position: "absolute",
+    bottom: "80px",
+    right: "10px",
+    width: "48px",
+    height: "48px",
+    borderRadius: "12px",
+    backgroundColor: "rgba(20, 20, 20, 0.95)",
+    border: "1px solid rgba(255, 255, 255, 0.1)",
+    boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: "24px",
+    zIndex: 999,
+    transition: "all 0.2s ease"
+  };
+
   const renderOverlay = () => {
     if (status === "loading" || status === "initializing") {
       return (
@@ -755,6 +1055,9 @@ function GeeWebMap({ style = {}, onReady }) {
       {/* Analytics Panel */}
       {isBackendReady && renderAnalyticsPanel()}
 
+      {/* Analysis Selection Menu */}
+      {isBackendReady && renderAnalysisMenu()}
+
       {/* Search Bar */}
       {isBackendReady && (
         <div style={searchContainerStyle}>
@@ -801,14 +1104,79 @@ function GeeWebMap({ style = {}, onReady }) {
         </div>
       )}
 
+      {/* Floating Action Buttons */}
+      {isBackendReady && (
+        <>
+          {/* Toggle Analysis Menu Button */}
+          <button
+            style={{
+              ...floatingButtonStyle,
+              bottom: '140px',
+              backgroundColor: showAnalysisMenu ? 'rgba(66, 133, 244, 0.95)' : 'rgba(20, 20, 20, 0.95)'
+            }}
+            onClick={() => setShowAnalysisMenu(!showAnalysisMenu)}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.transform = 'scale(1.1)';
+              e.currentTarget.style.backgroundColor = showAnalysisMenu ? 'rgba(66, 133, 244, 1)' : 'rgba(40, 40, 40, 0.95)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.transform = 'scale(1)';
+              e.currentTarget.style.backgroundColor = showAnalysisMenu ? 'rgba(66, 133, 244, 0.95)' : 'rgba(20, 20, 20, 0.95)';
+            }}
+            title="Select Analysis Type"
+          >
+            {selectedAnalysis.icon}
+          </button>
+
+          {/* Toggle Charts Panel Button */}
+          {selectedAnalysis.hasStats && selectedLocation && (
+            <button
+              style={{
+                ...floatingButtonStyle,
+                bottom: '80px',
+                backgroundColor: showChartsPanel ? 'rgba(66, 133, 244, 0.95)' : 'rgba(20, 20, 20, 0.95)'
+              }}
+              onClick={() => setShowChartsPanel(!showChartsPanel)}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.transform = 'scale(1.1)';
+                e.currentTarget.style.backgroundColor = showChartsPanel ? 'rgba(66, 133, 244, 1)' : 'rgba(40, 40, 40, 0.95)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.transform = 'scale(1)';
+                e.currentTarget.style.backgroundColor = showChartsPanel ? 'rgba(66, 133, 244, 0.95)' : 'rgba(20, 20, 20, 0.95)';
+              }}
+              title={showChartsPanel ? "Hide Charts" : "Show Charts"}
+            >
+              📊
+            </button>
+          )}
+        </>
+      )}
+
       {/* Status Indicator */}
       {isBackendReady && (
         <div style={statusStyle}>
           {status === "loading_layer" && <span>⏳ Loading imagery...</span>}
-          {status === "ready" && <span style={{ color: '#34a853' }}>✅ Ready</span>}
+          {status === "ready" && <span style={{ color: '#34a853' }}>✅ {selectedAnalysis.name}</span>}
           {status === "error" && <span style={{ color: '#ea4335' }}>❌ Error</span>}
         </div>
       )}
+
+      <style>{`
+        @keyframes spin {
+          to { transform: rotate(360deg); }
+        }
+        @keyframes slideIn {
+          from {
+            opacity: 0;
+            transform: translateX(-20px);
+          }
+          to {
+            opacity: 1;
+            transform: translateX(0);
+          }
+        }
+      `}</style>
     </div>
   );
 }

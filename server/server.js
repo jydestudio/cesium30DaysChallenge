@@ -424,6 +424,7 @@ app.post('/api/gee/ndvi-tiles', async (req, res) => {
 });
 
 // Get elevation data
+// Get elevation data
 app.post('/api/gee/elevation-tiles', async (req, res) => {
   try {
     if (!isInitialized) {
@@ -474,6 +475,396 @@ app.post('/api/gee/elevation-tiles', async (req, res) => {
     });
   }
 });
+
+// Burn Severity Analysis (dNBR) endpoint
+app.post('/api/gee/burn-severity-tiles', async (req, res) => {
+  try {
+    if (!isInitialized) {
+      return res.status(503).json({
+        error: 'Earth Engine not initialized yet'
+      });
+    }
+
+    const { 
+      preFireStartDate, 
+      preFireEndDate,
+      postFireStartDate,
+      postFireEndDate,
+      layer // 'pre', 'post', or 'dnbr'
+    } = req.body;
+
+    let geometry;
+
+    console.log('Received burn severity request:', { 
+      geometry, 
+      preFireStartDate, 
+      preFireEndDate,
+      postFireStartDate,
+      postFireEndDate,
+      layer 
+    });
+
+    // Build geometry if provided, otherwise use default point and buffer
+    let clipGeometry = null;
+    if (geometry && geometry.coordinates) {
+      clipGeometry = ee.Geometry(geometry);
+    } else {
+      console.log("no geometry provided, using default Mount Adams area");
+      // Default: Point at Mount Adams, Washington with 17km buffer
+      const defaultPoint = ee.Geometry.Point([-121.4517, 46.2047]);
+      clipGeometry = defaultPoint.buffer(17000).bounds();
+      console.log('Using default geometry: Mount Adams area');
+    }
+
+    // Scale surface reflectance function
+    const scaleSR = (image) => {
+      return image.select(['SR_B4', 'SR_B5', 'SR_B7'])  // Red, NIR, SWIR2
+                  .multiply(0.0000275).add(-0.2);
+    };
+
+    // Get DEM and hillshade
+    const dem = ee.Image('USGS/SRTMGL1_003').clip(clipGeometry);
+    const hillshade = ee.Terrain.hillshade(dem).unitScale(0, 255);
+
+    // Visualization parameters for RGB
+    const visParams = {
+      bands: ['SR_B7', 'SR_B5', 'SR_B4'],
+      min: 0.05,
+      max: 0.35,
+      gamma: 1.2
+    };
+
+    // Function to blend with hillshade
+    const blendWithHillshade = (image, params) => {
+      const vis = image.visualize(params);
+      const hsv = vis.unitScale(0, 255).rgbToHsv();
+      const shadedValue = hsv.select('value').multiply(hillshade.pow(1.8));
+      return ee.Image.cat([
+        hsv.select('hue'), 
+        hsv.select('saturation'), 
+        shadedValue
+      ]).hsvToRgb();
+    };
+
+    // Get pre-fire image
+    const preImage = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
+      .filterBounds(clipGeometry)
+      .filterDate(preFireStartDate || '2014-08-07', preFireEndDate || '2014-08-08')
+      .sort('CLOUD_COVER')
+      .first()
+      .clip(clipGeometry);
+
+
+    console.log("befofre")
+    // Get post-fire image
+    const postImage = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
+      .filterBounds(clipGeometry)
+      .filterDate(postFireStartDate || '2015-09-11', postFireEndDate || '2015-09-12')
+      .sort('CLOUD_COVER')
+      .first()
+      .clip(clipGeometry);
+
+    console.log("after")
+    // Scale images
+    const preScaled = scaleSR(preImage);
+    const postScaled = scaleSR(postImage);
+
+    // Compute NBR function
+    const computeNBR = (image) => {
+      return image.expression(
+        '(NIR - SWIR) / (NIR + SWIR)',
+        {
+          NIR: image.select('SR_B5'),
+          SWIR: image.select('SR_B7')
+        }
+      ).rename('NBR');
+    };
+
+    // Compute NBR for both images
+    const preNBR = computeNBR(preImage);
+    const postNBR = computeNBR(postImage);
+    const dNBR = preNBR.subtract(postNBR).rename('dNBR');
+
+    // High contrast palette for dNBR
+    const highContrastPalette = [
+      '#005a32', // Dark forest green - Unburned
+      '#1c9099', // Strong teal - Low severity
+      '#ffff33', // Neon yellow - Moderate severity
+      '#ff7f00', // Bright orange - High severity
+      '#b10026'  // Intense deep red - Extreme severity
+    ];
+
+    let finalImage;
+    let finalVisParams;
+
+    // Choose which layer to return
+    if (layer === 'pre') {
+      finalImage = blendWithHillshade(preScaled, visParams);
+      finalVisParams = { min: 0, max: 1 };
+    } else if (layer === 'post') {
+      finalImage = blendWithHillshade(postScaled, visParams);
+      finalVisParams = { min: 0, max: 1 };
+    } else {
+      // Default: dNBR with hillshade
+      const dNBRvis = dNBR.visualize({
+        min: 0,
+        max: 0.4,
+        palette: highContrastPalette
+      });
+      const dNBRhsv = dNBRvis.unitScale(0, 255).rgbToHsv();
+      const dNBRvalue = dNBRhsv.select('value').multiply(hillshade.pow(1.5));
+      finalImage = ee.Image.cat([
+        dNBRhsv.select('hue'),
+        dNBRhsv.select('saturation'),
+        dNBRvalue
+      ]).hsvToRgb();
+      finalVisParams = { min: 0, max: 1 };
+    }
+
+    // Get map tiles
+    finalImage.getMap(finalVisParams, (mapInfo) => {
+      if (mapInfo && mapInfo.urlFormat) {
+        console.log('✅ Burn severity tiles generated successfully');
+        res.json({
+          success: true,
+          tileUrl: mapInfo.urlFormat,
+          legend: {
+            title: 'Burn Severity (dNBR)',
+            classes: [
+              { label: 'Unburned', color: '#005a32', value: 0 },
+              { label: 'Low Severity', color: '#1c9099', value: 1 },
+              { label: 'Moderate Severity', color: '#ffff33', value: 2 },
+              { label: 'High Severity', color: '#ff7f00', value: 3 },
+              { label: 'Extreme Severity', color: '#b10026', value: 4 }
+            ]
+          },
+          metadata: {
+            layer: layer || 'dnbr',
+            preFireDate: `${preFireStartDate || '2014-08-07'} to ${preFireEndDate || '2014-08-08'}`,
+            postFireDate: `${postFireStartDate || '2015-09-11'} to ${postFireEndDate || '2015-09-12'}`,
+            geometryProvided: !!geometry
+          }
+        });
+      } else {
+        res.status(500).json({
+          error: 'Failed to generate burn severity tiles'
+        });
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error generating burn severity tiles:', error);
+    res.status(500).json({
+      error: error.message
+    });
+  }
+});
+
+// Burn Severity Statistics endpoint
+app.post('/api/gee/burn-severity-stats', async (req, res) => {
+  try {
+    if (!isInitialized) {
+      return res.status(503).json({
+        error: 'Earth Engine not initialized yet'
+      });
+    }
+
+    const { 
+      geometry, 
+      preFireStartDate, 
+      preFireEndDate,
+      postFireStartDate,
+      postFireEndDate
+    } = req.body;
+
+    // Build geometry if provided, otherwise use default point and buffer
+    let clipGeometry = null;
+    if (geometry && geometry.coordinates) {
+      clipGeometry = ee.Geometry(geometry);
+    } else {
+      // Default: Point at Mount Adams, Washington with 17km buffer
+      const defaultPoint = ee.Geometry.Point([-121.4517, 46.2047]);
+      clipGeometry = defaultPoint.buffer(17000).bounds();
+      console.log('Using default geometry for stats: Mount Adams area');
+    }
+
+    // Scale surface reflectance function
+    const scaleSR = (image) => {
+      return image.select(['SR_B4', 'SR_B5', 'SR_B7'])
+                  .multiply(0.0000275).add(-0.2);
+    };
+
+    // Get pre-fire image
+    const preImage = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
+      .filterBounds(clipGeometry)
+      .filterDate(preFireStartDate || '2014-08-07', preFireEndDate || '2014-08-08')
+      .sort('CLOUD_COVER')
+      .first()
+      .clip(clipGeometry);
+
+    // Get post-fire image
+    const postImage = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
+      .filterBounds(clipGeometry)
+      .filterDate(postFireStartDate || '2015-09-11', postFireEndDate || '2015-09-12')
+      .sort('CLOUD_COVER')
+      .first()
+      .clip(clipGeometry);
+
+    // Compute NBR function
+    const computeNBR = (image) => {
+      return image.expression(
+        '(NIR - SWIR) / (NIR + SWIR)',
+        {
+          NIR: image.select('SR_B5'),
+          SWIR: image.select('SR_B7')
+        }
+      ).rename('NBR');
+    };
+
+    // Compute NBR for both images
+    const preNBR = computeNBR(preImage);
+    const postNBR = computeNBR(postImage);
+    const dNBR = preNBR.subtract(postNBR).rename('dNBR');
+
+    // Define severity classes based on dNBR values
+    // Unburned: dNBR < 0.1
+    // Low: 0.1 - 0.27
+    // Moderate: 0.27 - 0.44
+    // High: 0.44 - 0.66
+    // Extreme: > 0.66
+    
+    const pixelArea = ee.Image.pixelArea();
+    
+    // Calculate area for each severity class
+    const unburned = dNBR.lt(0.1).multiply(pixelArea);
+    const lowSeverity = dNBR.gte(0.1).and(dNBR.lt(0.27)).multiply(pixelArea);
+    const moderateSeverity = dNBR.gte(0.27).and(dNBR.lt(0.44)).multiply(pixelArea);
+    const highSeverity = dNBR.gte(0.44).and(dNBR.lt(0.66)).multiply(pixelArea);
+    const extremeSeverity = dNBR.gte(0.66).multiply(pixelArea);
+
+    // Reduce regions to calculate total area for each class
+    const areaCalculations = [
+      unburned.reduceRegion({
+        reducer: ee.Reducer.sum(),
+        geometry: clipGeometry,
+        scale: 30, // Landsat resolution
+        maxPixels: 1e13,
+        bestEffort: true
+      }),
+      lowSeverity.reduceRegion({
+        reducer: ee.Reducer.sum(),
+        geometry: clipGeometry,
+        scale: 30,
+        maxPixels: 1e13,
+        bestEffort: true
+      }),
+      moderateSeverity.reduceRegion({
+        reducer: ee.Reducer.sum(),
+        geometry: clipGeometry,
+        scale: 30,
+        maxPixels: 1e13,
+        bestEffort: true
+      }),
+      highSeverity.reduceRegion({
+        reducer: ee.Reducer.sum(),
+        geometry: clipGeometry,
+        scale: 30,
+        maxPixels: 1e13,
+        bestEffort: true
+      }),
+      extremeSeverity.reduceRegion({
+        reducer: ee.Reducer.sum(),
+        geometry: clipGeometry,
+        scale: 30,
+        maxPixels: 1e13,
+        bestEffort: true
+      })
+    ];
+
+    // Calculate all areas
+    Promise.all(areaCalculations.map(area => 
+      new Promise((resolve, reject) => {
+        area.evaluate((result, error) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve(result);
+          }
+        });
+      })
+    )).then(results => {
+      const severityClasses = [
+        { label: 'Unburned', color: '#005a32', value: 0 },
+        { label: 'Low Severity', color: '#1c9099', value: 1 },
+        { label: 'Moderate Severity', color: '#ffff33', value: 2 },
+        { label: 'High Severity', color: '#ff7f00', value: 3 },
+        { label: 'Extreme Severity', color: '#b10026', value: 4 }
+      ];
+
+      // Process area results
+      const areaStats = severityClasses.map((severityClass, index) => {
+        const areaInSqMeters = results[index]?.area || results[index]?.dNBR || 0;
+        const areaInSqKm = areaInSqMeters / 1000000;
+        const areaInHectares = areaInSqMeters / 10000;
+        
+        return {
+          class: severityClass.label,
+          value: severityClass.value,
+          color: severityClass.color,
+          areaInSqMeters: parseFloat(areaInSqMeters.toFixed(2)),
+          areaInSqKm: parseFloat(areaInSqKm.toFixed(4)),
+          areaInHectares: parseFloat(areaInHectares.toFixed(2))
+        };
+      });
+
+      // Calculate total area
+      const totalArea = areaStats.reduce((sum, stat) => sum + stat.areaInSqMeters, 0);
+
+      // Add percentage to each class
+      const areaStatsWithPercentage = areaStats.map(stat => ({
+        ...stat,
+        percentage: totalArea > 0 ? parseFloat(((stat.areaInSqMeters / totalArea) * 100).toFixed(2)) : 0
+      }));
+
+      // Filter out classes with 0 area for cleaner data
+      const nonZeroStats = areaStatsWithPercentage.filter(stat => stat.areaInSqMeters > 0);
+
+      res.json({
+        success: true,
+        statistics: {
+          classes: nonZeroStats,
+          allClasses: areaStatsWithPercentage,
+          totalAreaSqMeters: parseFloat(totalArea.toFixed(2)),
+          totalAreaSqKm: parseFloat((totalArea / 1000000).toFixed(4)),
+          totalAreaHectares: parseFloat((totalArea / 10000).toFixed(2)),
+          dateRange: {
+            preFire: {
+              startDate: preFireStartDate || '2014-08-07',
+              endDate: preFireEndDate || '2014-08-08'
+            },
+            postFire: {
+              startDate: postFireStartDate || '2015-09-11',
+              endDate: postFireEndDate || '2015-09-12'
+            }
+          }
+        }
+      });
+    }).catch(error => {
+      console.error('❌ Error calculating burn severity statistics:', error);
+      res.status(500).json({
+        error: 'Failed to calculate burn severity statistics',
+        details: error.message
+      });
+    });
+
+  } catch (error) {
+    console.error('❌ Error in burn severity statistics endpoint:', error);
+    res.status(500).json({
+      error: error.message
+    });
+  }
+});
+
 
 // Custom image collection endpoint
 app.post('/api/gee/custom-tiles', async (req, res) => {
