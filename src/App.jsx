@@ -3,6 +3,8 @@ import AIChatBox from './components/AIChatBox';
 import CesiumGlobe from './components/CesiumGlobe';
 import MapLibreMap from './components/maplibre.jsx';
 import GeeWebMap from './components/gee-webmap.jsx';
+import Planets from './components/planets.jsx';
+import MapProjections from './components/projections.jsx';
 import { Cartesian3, Color } from 'cesium';
 
 function App() {
@@ -40,8 +42,10 @@ function App() {
 
             {/* i don't understand shit */}
             <div style={{ width: '100%', height: '100%'}}>
-                <GeeWebMap/>
+                <MapProjections/>
             </div> 
+
+
         </div>
     );
 }
